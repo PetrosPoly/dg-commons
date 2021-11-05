@@ -35,3 +35,7 @@ sphinx>=4.2.0
 sphinx-rtd-theme>=1.0.0
 sphinx-autodoc-typehints
 sphinx-autodoc-annotation
+
+toolz~=0.11.1
+decorator~=5.1.0
+networkx~=2.6.3
