@@ -1,14 +1,39 @@
-from networkx import DiGraph, draw, bfs_edges, descendants, descendants_at_distance, draw_networkx_edges, \
-    draw_networkx_nodes, draw_networkx_labels, all_simple_paths
+from networkx import DiGraph, draw_networkx_edges, draw_networkx_nodes, draw_networkx_labels, all_simple_paths
 import networkx as nx
-from typing import List, Optional, Tuple, Mapping
+from typing import List, Optional, Tuple, Mapping, Set
 import numpy as np
 from commonroad.scenario.lanelet import LaneletNetwork
-from commonroad.scenario.scenario import Scenario
 from commonroad.common.file_reader import CommonRoadFileReader
 import matplotlib.pyplot as plt
 from matplotlib.collections import PathCollection, LineCollection
-from commonroad.visualization.mp_renderer import MPRenderer
+
+
+def get_lanelet_center_coordinates(lanelet_network: LaneletNetwork, lanelet_id: int) -> np.ndarray:
+    center = lanelet_network.find_lanelet_by_id(lanelet_id).polygon.center
+    return center
+
+
+def get_weight_from_lanelets(lanelet_network: LaneletNetwork, id_lanelet_1: int, id_lanelet_2: int) -> float:
+    """
+    Adapted from Commonroad Route Planner.
+    Calculate weights for edges on graph.
+    For successor: calculate average length of the involved lanes.
+    For right/left adjacent lanes: calculate average road width.
+    """
+    if id_lanelet_2 in lanelet_network.find_lanelet_by_id(id_lanelet_1).successor:
+        length_1 = lanelet_network.find_lanelet_by_id(id_lanelet_1).distance[-1]
+        length_2 = lanelet_network.find_lanelet_by_id(id_lanelet_2).distance[-1]
+        return (length_1 + length_2) / 2.0
+    # rough approximation by only calculating width on first point of polyline
+    elif id_lanelet_2 == lanelet_network.find_lanelet_by_id(id_lanelet_1).adj_left \
+            or id_lanelet_2 == lanelet_network.find_lanelet_by_id(id_lanelet_1).adj_right:
+        width_1 = np.linalg.norm(lanelet_network.find_lanelet_by_id(id_lanelet_1).left_vertices[0]
+                                 - lanelet_network.find_lanelet_by_id(id_lanelet_1).right_vertices[0])
+        width_2 = np.linalg.norm(lanelet_network.find_lanelet_by_id(id_lanelet_2).left_vertices[0]
+                                 - lanelet_network.find_lanelet_by_id(id_lanelet_2).right_vertices[0])
+        return (width_1 + width_2) / 2.0
+    else:
+        raise ValueError("You are trying to assign a weight but no edge exists.")
 
 
 class RoadGraph:
@@ -17,153 +42,95 @@ class RoadGraph:
     Forbidden lanelets (for cars) are not added to the network.
     Forbidden lanelets can also be manually.
     """
-    #fixme: may become an issue for other scenarios, condition may need a ".value" to be added. Wait and see.
-    forbidden_lanelet_types = ["busLane", "bicycleLane", "sidewalk"]
-    uncrossable_line_markings = ["solid", "broad_solid"]
+    # forbidden_lanelet_types = ["busLane", "bicycleLane", "sidewalk"]
+    uncrossable_line_markings = ["solid", "broad_solid"]  # no vehicle can cross this
 
-    def __init__(self, lanelet_network: LaneletNetwork, prohibited_lanelets: Optional[List[int]] = None):
-        self.road_graph: DiGraph = DiGraph()
-        self.lanelet_network = lanelet_network
-        if prohibited_lanelets is None:
-            prohibited_lanelets = list()
-            for lanelet in self.lanelet_network.lanelets:
-                if lanelet.lanelet_type in self.forbidden_lanelet_types:
-                    prohibited_lanelets.append(lanelet.lanelet_id)
-        self.prohibited_lanelets = prohibited_lanelets
-
-    def create_topology_from_lanelet_network(self, weighted: bool = False) -> None:
+    def __init__(self, lanelet_network: LaneletNetwork, excluded_lanelets: Optional[List[int]] = None):
         """
         Create a digraph from a Commonroad lanelet network.
-        If lanelets are in the prohibited_lanelets network, they will not
-        be added to the digraph.
-
-        :param weighted: if False, all weights will be set to 1. If True,
-        length of lanelets will be considered.
+        :param lanelet_network: Commonroad lanelet network
+        :param excluded_lanelets: lanelets that should not be added to the graph
         """
-        nodes = list()
-        edges = list()
+        self.road_graph: DiGraph = DiGraph()
+        if excluded_lanelets is None:
+            excluded_lanelets = list()
+        self.excluded_lanelets = excluded_lanelets
+        self._init_road_graph(lanelet_network)
 
-        for lanelet in self.lanelet_network.lanelets:
-            # skip prohibited lanelet
-            if lanelet.lanelet_id in self.prohibited_lanelets:
+    def _init_road_graph(self, lanelet_network: LaneletNetwork):
+        """
+        Construct road graph from road network. All lanelets are added, including the lanelet type.
+        Lanelets that are in "excluded_lanelets" will be omitted.
+        Edges are constructed between a lanelet and its successor, its right adjacent, and left adjacent.
+        If a lane between adjacent lanelets is uncrossable, edge is omitted.
+        Length of lane is considered and added as weight.
+        """
+        # add all nodes
+        for lanelet in lanelet_network.lanelets:
+            # skip excluded lanelet
+            if lanelet.lanelet_id in self.excluded_lanelets:
                 continue
-
             # add permissible lanelet to graph
-            nodes.append(lanelet.lanelet_id)
+            center = get_lanelet_center_coordinates(lanelet_network, lanelet.lanelet_id)
+            self.road_graph.add_node(lanelet.lanelet_id,
+                                     lanelet_type=lanelet.lanelet_type,
+                                     pos=center)
 
             # add edge for all succeeding lanelets
             for id_successor in lanelet.successor:
-                # skip if prohibited
-                if id_successor in self.prohibited_lanelets:
+                # skip excluded lanelet (may be a successor of an allowed lanelet)
+                if id_successor in self.excluded_lanelets:
                     continue
-                if weighted:
-                    weight = self.get_weight_from_lanelets(id_lanelet_1=lanelet.lanelet_id,
-                                                           id_lanelet_2=id_successor, successor=True)
-                    edges.append((lanelet.lanelet_id, id_successor, {'weight': weight}))
-                else:
-                    edges.append((lanelet.lanelet_id, id_successor, {'weight': 1}))
+                weight = get_weight_from_lanelets(lanelet_network=lanelet_network,
+                                                  id_lanelet_1=lanelet.lanelet_id,
+                                                  id_lanelet_2=id_successor)
+                self.road_graph.add_edge(lanelet.lanelet_id, id_successor, weight=weight)
 
             # add edge for adjacent right lanelet (if existing)
             if lanelet.adj_right_same_direction and lanelet.adj_right is not None:
 
-                # skip if prohibited
-                if lanelet.adj_right in self.prohibited_lanelets\
+                # skip excluded lanelet (may be adj right of an allowed lanelet)
+                if lanelet.adj_right in self.excluded_lanelets \
                         or lanelet.line_marking_right_vertices.value \
                         in self.uncrossable_line_markings:
                     continue
 
-                if weighted:
-                    weight = self.get_weight_from_lanelets(id_lanelet_1=lanelet.lanelet_id,
-                                                           id_lanelet_2=lanelet.adj_right,
-                                                           successor=False)
-                    edges.append((lanelet.lanelet_id, lanelet.adj_right, {'weight': weight}))
-                else:
-                    edges.append((lanelet.lanelet_id, lanelet.adj_right, {'weight': 1}))
+                weight = get_weight_from_lanelets(lanelet_network=lanelet_network,
+                                                  id_lanelet_1=lanelet.lanelet_id,
+                                                  id_lanelet_2=lanelet.adj_right)
+                self.road_graph.add_edge(lanelet.lanelet_id, lanelet.adj_right, weight=weight)
 
             # add edge for adjacent left lanelets (if existing)
             if lanelet.adj_left_same_direction and lanelet.adj_left is not None:
 
-                # skip if prohibited
-                if lanelet.adj_left in self.prohibited_lanelets \
+                # skip excluded lanelet (may be adj left of an allowed lanelet)
+                if lanelet.adj_left in self.excluded_lanelets \
                         or lanelet.line_marking_left_vertices.value \
                         in self.uncrossable_line_markings:
                     continue
 
-                if weighted:
-                    weight = self.get_weight_from_lanelets(id_lanelet_1=lanelet.lanelet_id,
-                                                           id_lanelet_2=lanelet.adj_left,
-                                                           successor=False)
-                    edges.append((lanelet.lanelet_id, lanelet.adj_left, {'weight': weight}))
-                else:
-                    edges.append((lanelet.lanelet_id, lanelet.adj_left, {'weight': 1}))
+                weight = get_weight_from_lanelets(lanelet_network=lanelet_network,
+                                                  id_lanelet_1=lanelet.lanelet_id,
+                                                  id_lanelet_2=lanelet.adj_left)
+                self.road_graph.add_edge(lanelet.lanelet_id, lanelet.adj_left, weight=weight)
+        return
 
-        self.road_graph.add_nodes_from(nodes)
-        self.road_graph.add_edges_from(edges)
-
-    # naive implementation of weight generation. Make more accurate when needed
-    def get_weight_from_lanelets(self, id_lanelet_1: int, id_lanelet_2: int, successor: bool) -> float:
-        """
-        Adapted from Commonroad Route Planner.
-        Calculate weights for edges on graph.
-        For successor: calculate average lenght of the involved lanes.
-        For right/left adjacent lanes: calculate average road width.
-        Highly heuristic and may need some refinement in the future
-        """
-        if successor:
-            length_1 = self.lanelet_network.find_lanelet_by_id(id_lanelet_1).distance[-1]
-            length_2 = self.lanelet_network.find_lanelet_by_id(id_lanelet_2).distance[-1]
-            return (length_1 + length_2) / 2.0
-        # rough approximation by only calculating width on first point of polyline
-        else:
-            width_1 = np.linalg.norm(self.lanelet_network.find_lanelet_by_id(id_lanelet_1).left_vertices[0]
-                                     - self.lanelet_network.find_lanelet_by_id(id_lanelet_1).right_vertices[0])
-            width_2 = np.linalg.norm(self.lanelet_network.find_lanelet_by_id(id_lanelet_2).left_vertices[0]
-                                     - self.lanelet_network.find_lanelet_by_id(id_lanelet_2).right_vertices[0])
-            return (width_1 + width_2) / 2.0
-
-    def get_lanelet_center_coordinates(self, lanelet_ids: List[int]) -> List[np.ndarray]:
-        centers = []
-        for lanelet_id in lanelet_ids:
-            center_line = self.lanelet_network.find_lanelet_by_id(lanelet_id).center_vertices
-
-            # center line has an even amount of points
-            if len(center_line) % 2 == 0:
-                centers.append(
-                    (center_line[int(-1+len(center_line) / 2)]
-                     + center_line[int(len(center_line) / 2)]) / 2)
-            # center line has an odd amount of points
-            elif len(center_line) % 2 == 1:
-                centers.append(
-                    (center_line[int(len(center_line) / 2)]))
-
-            if lanelet_id == 3416:
-                print("ID 3416: " + str(centers[-1]))
-            if lanelet_id == 3426:
-                print("ID 3426: " + str(centers[-1]))
-            if lanelet_id == 3428:
-                print("ID 3428: " + str(centers[-1]))
-        return centers
-
-    def plot_graph_on_road_static(self, renderer: MPRenderer, filename: str, start_node: int, end_node: int) -> None:
+    def plot_graph(self, filename: str, start_node: int, end_node: int) -> None:
         plt.figure(1)
-        # scenario.draw(renderer) #also draws cars
-        scenario.lanelet_network.draw(renderer)
-        # planning_problem_set.draw(rnd)
-        renderer.render()
         plt.grid(True)
         plt.xlabel('X Axis')
         plt.ylabel('Y Axis')
-        visited_nodes, special_edges = self.get_possible_occupancy(start_node=start_node, end_node=end_node)
+        visited_nodes, special_edges = self.get_possible_resources(start_node=start_node, end_node=end_node)
         goal_nodes = self.get_occupancy_children(occupancy_nodes=visited_nodes)
         _, _, _ = self.get_collections_networkx(special_edges=special_edges, visited_nodes=visited_nodes,
                                                 goal_nodes=goal_nodes, start_node=start_node, end_node=end_node)
         plt.savefig(filename)
         plt.close()
 
-    def get_collections_networkx(self, special_edges: Optional[List[Tuple]] = None,
-                                 visited_nodes: List[int] = None, goal_nodes: List[int] = None,
-                                 start_node: int = None, end_node: int = None)\
-                                 -> Tuple[PathCollection, LineCollection, Mapping[int, plt.Text]]:
+    def get_collections_networkx(self, special_edges: Set[Tuple[int, int]] = None,
+                                 visited_nodes: Set[int] = None, goal_nodes: List[int] = None,
+                                 start_node: int = None, end_node: int = None) \
+            -> Tuple[PathCollection, LineCollection, Mapping[int, plt.Text]]:
         """
         Get collections for plotting a graph on top of a scenario
 
@@ -173,10 +140,14 @@ class RoadGraph:
         :param start_node: Departure node of ego.
         :param end_node: Arrival node of ego.
         """
-        nodes = list(self.road_graph.nodes)
-        cents = obj.get_lanelet_center_coordinates(nodes)
-        centers = dict(zip(nodes, cents))
+        nodes = self.road_graph.nodes
+        cents = []
+        for node in nodes.data():
+            cents.append(node[-1]['pos'])
 
+        centers = dict(zip(nodes.keys(), cents))
+
+        # set default edge and node colors
         edge_colors = ['k'] * len(self.road_graph.edges)
         node_colors = ['#1f78b4'] * len(self.road_graph.nodes)
 
@@ -206,8 +177,10 @@ class RoadGraph:
             node_colors[list(self.road_graph.nodes).index(end_node)] = 'limegreen'
 
         # return collections and set zorders
+        # the functions draw_* already plot on axes
         nodes_plot = draw_networkx_nodes(G=self.road_graph, pos=centers, node_size=500, node_color=node_colors)
         nodes_plot.set_zorder(50)
+
         edges_plot = draw_networkx_edges(G=self.road_graph, pos=centers, edge_color=edge_colors)
         labels_plot = draw_networkx_labels(G=self.road_graph, pos=centers)
         for edge in range(len(edges_plot)):
@@ -216,7 +189,7 @@ class RoadGraph:
             labels_plot[label].set_zorder(51)
         return nodes_plot, edges_plot, labels_plot
 
-    def get_possible_occupancy(self, start_node: int, end_node: int) -> Tuple[List[int], List[Tuple[int, int]]]:
+    def get_possible_resources(self, start_node: int, end_node: int) -> Tuple[Set[int], Set[Tuple[int, int]]]:
         """
         Compute all nodes where an agent could be when transiting from start_node to end_node
         Return both occupied nodes and occupied edges
@@ -226,26 +199,21 @@ class RoadGraph:
         """
         paths = all_simple_paths(self.road_graph, source=start_node, target=end_node)
 
-        occupancy_nodes = []
-        occupancy_edges = []
+        occupancy_nodes = set()
+        occupancy_edges = set()
         for path in paths:
             # add new nodes only if they are not yet in occupancy_nodes
-            helper_nodes = set(path)-set(occupancy_nodes)
-            occupancy_nodes = occupancy_nodes + list(helper_nodes)
-
+            occupancy_nodes |= set(path)
             # add new edges only if they are not yet in occupancy_edges
             path_edges = nx.utils.pairwise(path)  # transforms [a,b,c,...] in [(a,b),(b,c),...]
-            helper_edges = set(path_edges) - set(occupancy_edges)
-            occupancy_edges = occupancy_edges + list(helper_edges)
-
+            occupancy_edges |= set(path_edges)
         return occupancy_nodes, occupancy_edges
 
-    # question: may be useful to also return the edge directed to that node if there are multiple possible edges
     def get_occupancy_children(self, occupancy_nodes) -> List[int]:
         """
         Compute the children of the nodes in the "occupancy zone" as computed by "get_possible_occupancy"
 
-        :param occupancy_nodes: part og digraph where the ego could be on his journey to the goal
+        :param occupancy_nodes: part of digraph where the ego could be on his journey to the goal
         """
         children = []
         for node in occupancy_nodes:
@@ -262,7 +230,6 @@ class RoadGraph:
     # For now, keep for reference or reusage.
 
     # naive implementation: depth_limit is just a user-defined integer. May not be the right choice.
-    # todo: make it also return weights
     '''def breadth_first_search(self, source_node: int, depth_limit: int = None) -> DiGraph:
         edges = list(bfs_edges(G=self.road_graph, source=source_node, depth_limit=depth_limit))
         return DiGraph(edges)
@@ -313,24 +280,14 @@ class RoadGraph:
         return self.return_circle(goal_center_coordinate,10)'''
 
 
+if __name__ == '__main__':
+    scenario_path1 = "/home/leon/Documents/repos/driving-games/scenarios/commonroad-scenarios/scenarios/hand-crafted/ZAM_Zip-1_66_T-1.xml"  # remove e.g. 24
+    scenario_path2 = "/home/leon/Documents/repos/driving-games/scenarios/commonroad-scenarios/scenarios/NGSIM/Peachtree/USA_Peach-1_1_T-1.xml"  # remove e.g. 52826
+    scenario_path3 = "/home/leon/Documents/repos/driving-games/scenarios/commonroad-scenarios/scenarios/hand-crafted/DEU_Muc-1_2_T-1.xml"  # remove e.g. 24
 
+    scenario, planning_problem_set = CommonRoadFileReader(scenario_path3).open(lanelet_assignment=True)
+    net = scenario.lanelet_network
 
-
-
-
-
-scenario_path1 = "/home/leon/Documents/repos/driving-games/scenarios/commonroad-scenarios/scenarios/hand-crafted/ZAM_Zip-1_66_T-1.xml"  # remove e.g. 24
-scenario_path2 = "/home/leon/Documents/repos/driving-games/scenarios/commonroad-scenarios/scenarios/NGSIM/Peachtree/USA_Peach-1_1_T-1.xml"  # remove e.g. 52826
-scenario_path3 = "/home/leon/Documents/repos/driving-games/scenarios/commonroad-scenarios/scenarios/hand-crafted/DEU_Muc-1_2_T-1.xml"  # remove e.g. 24
-
-scenario, planning_problem_set = CommonRoadFileReader(scenario_path3).open(lanelet_assignment=True)
-net = scenario.lanelet_network
-
-
-obj = RoadGraph(lanelet_network=net)
-obj.create_topology_from_lanelet_network()
-obj.plot_graph_on_road_static(renderer=MPRenderer(figsize=(100, 100)), filename='demo', start_node=3512, end_node=3450)
-
-
-
+    obj = RoadGraph(lanelet_network=net)
+    obj.plot_graph(filename='graph_only', start_node=3512, end_node=3450)
 
