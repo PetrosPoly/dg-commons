@@ -1,10 +1,12 @@
 import math
 from itertools import chain
 from typing import Mapping, List, Union, Optional, Sequence
+from dg_commons.planning.trajectory import Trajectory
 
 from matplotlib import pyplot as plt
 from matplotlib.animation import FuncAnimation
 from matplotlib.axes import Axes
+from matplotlib.patches import Patch
 from toolz.sandbox import unzip
 
 from dg_commons import PlayerName, X
@@ -58,6 +60,8 @@ def create_animation(
     # dictionaries with the handles of the plotting stuff
     states, actions, extra, texts = {}, {}, {}, {}
     traj_lines, traj_points = {}, {}
+    polygons = {}
+    patches = {}
     history = {}
     # some parameters
     plot_wheels: bool = True
@@ -72,7 +76,9 @@ def create_animation(
             + list(extra.values())
             + list(traj_lines.values())
             + list(traj_points.values())
+            #+ list(polygons.values())
             + list(texts.values())
+            + list(patches.values())
         )
 
     def init_plot():
@@ -92,10 +98,29 @@ def create_animation(
                 )
                 if plog.extra:
                     try:
-                        trajectories, tcolors = unzip(plog.extra)
-                        traj_lines[pname], traj_points[pname] = sim_viz.plot_trajectories(
-                            ax=ax, player_name=pname, trajectories=list(trajectories), colors=list(tcolors)
-                        )
+                        drawable, tcolors = unzip(plog.extra)
+                        drawable_list, colors_list = list(drawable), list(tcolors)
+
+                        traj_list, traj_colors = [], []
+                        patch_list, patch_colors = [], []
+                        for i, item in enumerate(drawable_list):
+                            if isinstance(item, Trajectory):
+                                traj_list.append(item)
+                                traj_colors.append(colors_list[i])
+                            elif isinstance(item, Patch):
+                                patch_list.append(item)
+                                patch_colors.append(colors_list[i])
+
+                        if traj_list:
+                            traj_lines[pname], traj_points[pname] = sim_viz.plot_trajectories(
+                                ax=ax, player_name=pname, trajectories=traj_list, colors=traj_colors
+                            )
+                        if patch_list:
+                            patches[pname] = sim_viz.plot_patches(
+                                ax=ax,
+                                patches=patch_list,
+                                colors=patch_colors,
+                            )
                     except:
                         logger.warn(f"Cannot plot extra", extra=plog.extra)
             adjust_axes_limits(
@@ -129,16 +154,35 @@ def create_animation(
             )
             if log_at_t[pname].extra:
                 try:
-                    trajectories, tcolors = unzip(log_at_t[pname].extra)
-                    traj_lines[pname], traj_points[pname] = sim_viz.plot_trajectories(
-                        ax=ax,
-                        player_name=pname,
-                        trajectories=list(trajectories),
-                        traj_lines=traj_lines[pname],
-                        traj_points=traj_points[pname],
-                        colors=list(tcolors),
-                    )
-                except:
+                    drawable, tcolors = unzip(log_at_t[pname].extra)
+                    drawable_list, colors_list = list(drawable), list(tcolors)
+
+                    traj_list, traj_colors = [], []
+                    patch_list, patch_colors = [], []
+                    for i, item in enumerate(drawable_list):
+                        if isinstance(item, Trajectory):
+                            traj_list.append(item)
+                            traj_colors.append(colors_list[i])
+                        elif isinstance(item, Patch):
+                            patch_list.append(item)
+                            patch_colors.append(colors_list[i])
+
+                    if traj_list:
+                        traj_lines[pname], traj_points[pname] = sim_viz.plot_trajectories(
+                            ax=ax,
+                            player_name=pname,
+                            trajectories=traj_list,
+                            traj_lines=traj_lines[pname],
+                            traj_points=traj_points[pname],
+                            colors=traj_colors,
+                        )
+                    if patch_list:
+                        patches[pname] = sim_viz.plot_patches(
+                            ax=ax,
+                            patches=patch_list,
+                            colors=patch_colors,
+                        )
+                except Exception as e:
                     logger.warn(f"Cannot plot extra", extra=log_at_t[pname].extra)
         adjust_axes_limits(
             ax=ax, plot_limits=plot_limits, players_states=[player.state for player in log_at_t.values()]

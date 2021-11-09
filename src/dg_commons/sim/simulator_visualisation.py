@@ -9,9 +9,9 @@ from commonroad.visualization.mp_renderer import MPRenderer
 from decorator import contextmanager
 from geometry import SE2_from_xytheta, SE2value
 from matplotlib.axes import Axes
-from matplotlib.collections import LineCollection, PathCollection
+from matplotlib.collections import LineCollection, PathCollection, PatchCollection
 from matplotlib.lines import Line2D
-from matplotlib.patches import Polygon, Circle
+from matplotlib.patches import Polygon, Circle, Patch
 
 from dg_commons import Color
 from dg_commons import PlayerName, X, U
@@ -55,6 +55,7 @@ class SimRenderer(SimRendererABC):
     def __init__(self, sim_context: SimContext, ax: Axes = None, *args, **kwargs):
         self.sim_context = sim_context
         self.commonroad_renderer: MPRenderer = MPRenderer(ax=ax, *args, **kwargs)
+        self.current_patchcollection = None
 
     @contextmanager
     def plot_arena(self, ax: Axes):
@@ -128,6 +129,28 @@ class SimRenderer(SimRendererABC):
             alpha=alpha,
         )
 
+    def plot_patches(
+        self,
+        ax: Axes,
+        patches: List[Patch],
+        colors: Optional[List[Color]] = None,
+        alpha: float = 1,
+    ) -> List[PatchCollection]:
+
+        #remove patches from previous timeframe
+        if self.current_patchcollection is not None:
+            self.current_patchcollection.remove()
+
+        assert colors is None or len(colors) == len(patches)
+
+        self.current_patchcollection = plot_patches(
+            ax=ax,
+            patches=patches,
+            colors=colors,
+            alpha=alpha,
+        )
+        return self.current_patchcollection
+
 
 def plot_trajectories(
     ax: Axes,
@@ -158,6 +181,22 @@ def plot_trajectories(
     # traj_points.set_facecolor(mcolor) # todo adjust color based on velocity
     # https://stackoverflow.com/questions/23966121/updating-the-positions-and-colors-of-pyplot-scatter
     return traj_lines, traj_points
+
+
+def plot_patches(
+    ax: Axes,
+    alpha: float = 1,
+    patches: Optional[List[Patch]] = None,
+    colors: List[Color] = None
+) -> List[PatchCollection]:
+
+    alpha = 0.5
+    patch = PatchCollection(patches, alpha=alpha)
+    patch.set_color(colors)
+    patch.set_zorder(ZOrders.TRAJECTORY)
+    ax.add_collection(patch)
+
+    return patch
 
 
 def plot_vehicle(
