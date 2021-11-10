@@ -90,19 +90,20 @@ class SpeedBehavior(Behavior[MutableMapping[PlayerName, PlayerObservations], Tup
         """ The speed reference"""
 
     def update_observations(self, agents: MutableMapping[PlayerName, PlayerObservations]):
-        self.agents = agents
         self.obs.agents = agents
 
-    def get_situation(self, at: float) -> Tuple[float, BehaviorSituation, Any]:
-        self.obs.my_name = self.my_name
-        my_pose = extract_pose_from_state(self.agents[self.my_name].state)
+        my_pose = extract_pose_from_state(agents[self.my_name].state)
 
         def rel_pose(other_obs: PlayerObservations) -> SE2Transform:
             other_pose: SE2value = extract_pose_from_state(other_obs.state)
             return SE2Transform.from_SE2(relative_pose(my_pose, other_pose))
 
-        agents_rel_pose: Dict[PlayerName, SE2Transform] = valmap(rel_pose, self.agents)
+        agents_rel_pose: Dict[PlayerName, SE2Transform] = valmap(rel_pose, agents)
         self.obs.rel_poses = agents_rel_pose
+
+    def get_situation(self, at: float) -> Tuple[float, BehaviorSituation, Any]:
+        self.obs.my_name = self.my_name
+
         c_frames, c_classes = self.cruise.update_observations(self.obs)
         e_frames, e_classes = self.emergency.update_observations(self.obs)
         if self.emergency.is_true():

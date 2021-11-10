@@ -1,17 +1,18 @@
 from abc import ABC, abstractmethod
 from dg_commons import U, X
+from typing import Any
 
 
 class Estimator(ABC):
     """ An estimator estimates a state based on a prediction model and on measurements """
 
     @abstractmethod
-    def update_prediction(self, uk: U):
+    def update_prediction(self, uk: Any):
         """ The estimate gets updated based on model predictions and on the input to the system """
         pass
 
     @abstractmethod
-    def update_measurement(self, mk: X):
+    def update_measurement(self, mk: Any):
         """ The estimate gets updated based on a measurement model and a measurement """
         pass
 
