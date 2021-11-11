@@ -56,6 +56,9 @@ class ObstacleBayesianParam(BaseParams):
     t_step: float = 0.1
     """ Time interval between two calls """
 
+    def __post_init__(self):
+        assert isinstance(self.prior_distribution_params, self.prior_distribution.REF_PARAMS)
+
 
 class ObstacleBayesian(Estimator):
     """ Bayesian estimator for presence of obstacles """
