@@ -11,7 +11,7 @@ class PCurve:
     P(Event at distance d) = 2 * arctan(distance * parameter) / pi * convergence_param
     """
 
-    def __init__(self, conv_speed: float, conv_val: float = 0.3):
+    def __init__(self, conv_speed: float, conv_val: float = 0.5):
         self.conv_speed = conv_speed
         self.conv_val = conv_val
 

@@ -1,3 +1,4 @@
+import copy
 from dataclasses import dataclass
 from typing import Union, List, Tuple, Optional
 import math
@@ -224,20 +225,19 @@ class GridOneD:
 class GridTwoD:
     """ Manages two-dimensional grid of values"""
 
-    def __init__(self, length: float, n_length: int, width: float, n_width: int, values: List[List[float]] = None):
+    def __init__(self, length: float, n_length: int, width: float, n_width: int, values: np.ndarray = None):
         self.area: float = length * width
         self.length_grid: GridOneD = GridOneD(length, n_length)
         self.width_grid: GridOneD = GridOneD(width, n_width)
 
         if values is not None:
-            assert len(values) == n_length
-            assert all(len(vals) == n_width for vals in values)
-            self._values = values
+            assert values.shape == (n_length, n_width)
+            self._values: np.ndarray = values
         else:
-            self._values = [[math.nan] * n_width] * n_length
+            self._values = np.zeros((n_length, n_width))
 
     @property
-    def values(self) -> List[List[float]]:
+    def values(self) -> np.ndarray:
         """
         Values getter
         @return: Values
@@ -251,12 +251,11 @@ class GridTwoD:
         return np.array(self.values)
 
     @values.setter
-    def values(self, values: List[List[float]]):
+    def values(self, values: np.ndarray):
         """
         Values setter enforcing correct dimensions
         """
-        assert len(values) == len(self.length_grid.nodes)
-        assert all(len(vals) == len(self.width_grid.nodes) for vals in values)
+        assert values.shape == (len(self.length_grid.nodes), len(self.width_grid.nodes))
         self._values = values
 
     def set(self, idx: Tuple[int, int], value: float):
@@ -267,8 +266,7 @@ class GridTwoD:
         """
         assert isinstance(idx[0], int)
         assert isinstance(idx[1], int)
-
-        self.values[idx[0]][idx[1]] = value
+        self._values[idx[0], idx[1]] = value
 
     def index_by_position(self, pos: List[float]) -> Tuple[float, float]:
         """
@@ -296,11 +294,20 @@ class GridTwoD:
         @param idx: X-index and Y-index of interest
         @return: Value at the passed indices
         """
-        indices = itertools.product([int(idx[0]), int(idx[0])+1], [int(idx[1]), int(idx[1])+1])
+        top_edge: bool = int(idx[0]) == len(self.length_grid.nodes) - 1
+        right_edge: bool = int(idx[1]) == len(self.width_grid.nodes) - 1
+
+        idxs_x = [int(idx[0]), int(idx[0]) + 1]
+        idxs_y = [int(idx[1]), int(idx[1]) + 1]
+        if top_edge:
+            idxs_x = [int(idx[0])-1, int(idx[0])]
+        if right_edge:
+            idxs_y = [int(idx[1])-1, int(idx[1])]
+        indices = itertools.product(idxs_x, idxs_y)
 
         values, xs, ys = [], [], []
         for idx_pair in indices:
-            values.append(self.values[idx_pair[0]][idx_pair[1]])
+            values.append(self.values[idx_pair[0], idx_pair[1]])
             pos = self.position_by_index(idx_pair)
             xs.append(pos[0])
             ys.append(pos[1])
