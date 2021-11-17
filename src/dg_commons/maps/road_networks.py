@@ -1,6 +1,8 @@
+import time
+
 from networkx import DiGraph, draw_networkx_edges, draw_networkx_nodes, draw_networkx_labels, all_simple_paths
 import networkx as nx
-from typing import List, Optional, Tuple, Mapping, Set, Dict, Any
+from typing import List, Optional, Tuple, Mapping, Set, Dict, Any, Callable, Union
 import numpy as np
 from commonroad.scenario.lanelet import LaneletNetwork, Lanelet
 from commonroad.planning.planning_problem import PlanningProblem
@@ -12,6 +14,7 @@ from matplotlib.collections import PathCollection, LineCollection
 from dg_commons.sim import SimObservations, SimTime
 from dg_commons import PlayerName
 from matplotlib.animation import FuncAnimation
+from copy import copy
 
 
 # currently not used
@@ -41,6 +44,159 @@ def get_weight_from_lanelets(lanelet_network: LaneletNetwork, id_lanelet_1: int,
         return (width_1 + width_2) / 2.0
     else:
         raise ValueError("You are trying to assign a weight but no edge exists.")
+
+
+class PredDict:
+    """
+    Class to work with dictionaries.
+    """
+
+    def __init__(self, players: List[PlayerName], goals: List[List[int]], entry: Union[bool, float] = True):
+        self.data = {}
+        self.give_structure_dict(players=players, goals=goals, entry=entry)  # gives structure to data dictionary
+
+    # def __iter__(self):
+    # return PredictionDictionaryIterator(self)
+
+    @staticmethod
+    def from_dict(skeleton: Dict[PlayerName, Dict[int, bool]], entry: Union[bool, float] = True):
+        skeleton_copy = copy(skeleton)  # tbd: needed? sufficient?
+        players = []
+        goals = []
+        for player, player_dict in skeleton_copy.items():
+            if player == 'ego':
+                continue
+            players.append(player)
+            player_goals = []
+            for goal, goal_data in player_dict.items():
+                player_goals.append(goal)
+            goals.append(player_goals)
+
+        return PredDict(players=players, goals=goals, entry=entry)
+
+    def give_structure_dict(self, players: List[PlayerName], goals: List[List[int]],
+                            entry: Union[bool, float] = True) -> None:
+        for index, player in enumerate(players):
+            self.add_player_to_dict(player=player, goals=goals[index], data=len(goals[index]) * [entry])
+        return
+
+    # tbd: check what this does to dict.
+    def add_player_to_dict(self, player: PlayerName, goals: List[Optional[int]], data: List[Any]) -> None:
+        assert len(goals) == len(data), 'Goals and data need to have the same number of elements.'
+        temp = dict.fromkeys(goals, None)
+        for i, (goal, value) in enumerate(temp.items()):
+            temp[goal] = data[i]
+
+        self.data[player] = copy(temp)
+        temp.clear()
+        return
+
+    def add_datapoint_to_dict(self, player: PlayerName, goal: int, data: Any) -> None:
+        self.data[player][goal] = data
+        return
+
+    def apply_function_everywhere(self, func: Callable) -> None:
+        for player, goals in self.data.items():
+            for goal in goals:
+                self.data[player][goal] = func(self.data[player][goal])
+        return
+
+    def initialize_prior(self, prior: str) -> None:
+        for player, goals in self.data.items():
+            if prior == "Uniform":
+                goals_list = list(goals.keys())
+                uniform = np.ones((1, len(goals_list))) * 1.0 / float(len(goals_list))
+                self.add_player_to_dict(player=player, goals=goals_list, data=uniform[0].tolist())
+            elif prior != "Uniform":
+                raise NotImplementedError
+        self.normalize()
+        return
+
+    # question: check this works
+    # fixme: division by 0 ignored. Should handle here or somewhere else?
+    def normalize(self) -> None:
+        """
+        normalize according to func
+        """
+        for player, player_dict in self.data.items():
+            if sum(player_dict.values()) == 0.0:  # just for debugging
+                print("Division by zero encountered. Fixme.")
+            norm_factor = 1.0 / sum(player_dict.values())
+            for goal in player_dict.items():
+                a = goal
+                b = self.data[player][goal[0]]
+                self.data[player][goal[0]] = self.data[player][goal[0]] * norm_factor
+        return
+
+    def __add__(self, other) -> None:
+        """
+        Element-wise sum
+        """
+        if self.data.keys() != other.data.keys():
+            raise TypeError('Keys of summing elements are not matching')
+        for player, goals in self.data.items():
+            if goals.keys() != other.data[player].keys():
+                raise TypeError('Goals for player ' + str(player) + ' are not matching in both elements.')
+        for player, goals in self.data.items():
+            for goal in goals:
+                self.data[player][goal] += other.data[player][goal]
+        return
+
+    def __mul__(self, other) -> None:
+        """
+        Element-wise multiplication. Can be either between two PredictionDictionary or between
+        a PredictionDictionary and a scalar.
+        """
+        if isinstance(other, PredDict):
+            if self.data.keys() != other.data.keys():
+                raise TypeError('Keys of multiplying elements are not matching')
+            for player, goals in self.data.items():
+                if goals.keys() != other.data[player].keys():
+                    raise TypeError('Goals for player ' + str(player) + ' are not matching in both elements.')
+            for player, goals in self.data.items():
+                for goal in goals:
+                    self.data[player][goal] *= other.data[player][goal]
+        elif isinstance(other, float):
+            for player, goals in self.data.items():
+                for goal in goals:
+                    a = self.data[player][goal]
+                    self.data[player][goal][0] = self.data[player][goal][0] * other
+                    # fixme: why is [0] needed (...[player][goal] is a List, but where does that come from?
+        else:
+            raise TypeError('You can only multiply by another PredictionDictionary or by a scalar')
+
+        return
+
+    def __sub__(self, other) -> None:
+        other.__mul__(-1.0)
+        return self.__add__(other)
+
+
+class Prediction:
+    """
+        Class to handle probabilities, costs and rewards on DynamicGraphs.
+    """
+
+    def __init__(self, goals_dict: Dict[PlayerName, Dict[int, bool]]):
+        # prediction parameters
+        self.beta: float = 1.0
+        self.prior_distribution: str = "Uniform"
+
+        # dictionary containing information about reachability of each goal by each agent
+        self.reachability_dict: PredDict = PredDict.from_dict(skeleton=goals_dict)
+
+        # probabilities
+        # dictionary containing probability of each goal for each agent
+        self.prob_dict: PredDict = PredDict.from_dict(skeleton=goals_dict, entry=0.0)
+        # dictionary containing prior probability for each goal
+        self.priors: PredDict = PredDict.from_dict(skeleton=goals_dict)
+        self.priors.initialize_prior(self.prior_distribution)
+
+        # rewards
+        # dictionary containing optimal rewards from current position to goal
+        self.suboptimal_reward: PredDict = PredDict.from_dict(skeleton=goals_dict)
+        # dictionary containing optimal rewards from initial position to goal
+        self.optimal_reward: PredDict = PredDict.from_dict(skeleton=goals_dict)
 
 
 class RoadGraph:
@@ -149,76 +305,8 @@ class RoadGraph:
         plt.close()
         return
 
-    """def create_graph_animation(self, file_path: str, func, frames : int):
-        fig, ax = plt.subplots(figsize=(10, 10))
-        anim = FuncAnimation(fig=fig, func=func, init_func=func, frames=frames, blit=True)#, frames=frame_count, blit=True, interval=dt
-        anim.save(filename=file_path)
-        return anim"""
-
-
-    """def get_collections_networkx(self, special_edges: Set[Tuple[int, int]] = None,
-                                 visited_nodes: Set[int] = None, goal_nodes: List[int] = None,
-                                 start_node: int = None, end_node: int = None) \
-            -> Tuple[PathCollection, LineCollection, Mapping[int, plt.Text]]:
-        
-        Get collections for plotting a graph on top of a scenario
-
-        :param special_edges: Edges to color differently.
-        :param visited_nodes: Nodes to color differently.
-        :param goal_nodes: possible other agents goals.
-        :param start_node: Departure node of ego.
-        :param end_node: Arrival node of ego.
-        
-        nodes = self.road_graph.nodes
-        cents = []
-        for node in nodes.data():
-            cents.append(node[-1]['polygon'].center)  # tbd: works??
-
-        centers = dict(zip(nodes.keys(), cents))
-
-        # set default edge and node colors
-        edge_colors = ['k'] * len(self.road_graph.edges)
-        node_colors = ['#1f78b4'] * len(self.road_graph.nodes)
-
-        # color possible goal nodes
-        if goal_nodes is not None:
-            special_indices = [i for i, item in enumerate(self.road_graph.nodes) if item in goal_nodes]
-            for ind in special_indices:
-                node_colors[ind] = 'magenta'
-
-        # color visited nodes
-        if visited_nodes is not None:
-            special_indices = [i for i, item in enumerate(self.road_graph.nodes) if item in visited_nodes]
-            for ind in special_indices:
-                node_colors[ind] = 'r'
-
-        # color edges on ego's path
-        if special_edges is not None:
-            special_indices = [i for i, item in enumerate(self.road_graph.edges) if item in special_edges]
-            for ind in special_indices:
-                edge_colors[ind] = 'r'
-
-        # color ego's start and end node
-        if start_node is not None:
-            node_colors[list(self.road_graph.nodes).index(start_node)] = 'gold'
-
-        if end_node is not None:
-            node_colors[list(self.road_graph.nodes).index(end_node)] = 'limegreen'
-
-        # return collections and set zorders
-        # the functions draw_* already plot on axes
-        nodes_plot = draw_networkx_nodes(G=self.road_graph, pos=centers, node_size=200, node_color=node_colors)
-        nodes_plot.set_zorder(50)
-
-        edges_plot = draw_networkx_edges(G=self.road_graph, pos=centers, edge_color=edge_colors)
-        labels_plot = draw_networkx_labels(G=self.road_graph, pos=centers)
-        for edge in range(len(edges_plot)):
-            edges_plot[edge] = edges_plot[edge].set_zorder(49)
-        for label in labels_plot.keys():
-            labels_plot[label].set_zorder(51)
-        return nodes_plot, edges_plot, labels_plot"""
-
-    def get_collections_networkx(self, ax: Axes = None) -> Tuple[PathCollection, LineCollection, Mapping[int, plt.Text]]:
+    def get_collections_networkx(self, ax: Axes = None) -> Tuple[
+        PathCollection, LineCollection, Mapping[int, plt.Text]]:
         """
         Get collections for plotting a graph on top of a scenario
 
@@ -321,12 +409,45 @@ class RoadGraph:
 
         return is_upstream
 
-    def shortest_path(self, start_node: int, end_node: int):  # tbd: what type returned
+    # tbd: reward function
+    def reward_1(self, weight: float):
+        return -weight
+
+    def reward_2(self):
+        return
+
+    def shortest_paths_rewards(self, start_node: int, end_node: int, reward: Callable) \
+            -> Tuple[List[List[int]], List[float]]:  # tbd: what type returned
+        """
+        Compute all shortest simple paths between two nodes using dijkstra algorithm.
+        Weight is considered. If several paths have same (shortest) length, return them all.
+        Returns path and reward.
+
+        :param start_node: starting node of path
+        :param end_node: ending node of path
+        :param reward: function to use to calculate reward of a specific path
+        """
+
         paths = nx.all_shortest_paths(G=self.road_graph, source=start_node, target=end_node,
-                                      weight=None, method='dijkstra')
-        return paths
+                                      weight='weight', method='dijkstra')  # question: check if weight is considered
+        rewards = []
+        paths_list = list(paths)
+        for path in paths_list:
+            rewards.append(self.get_cost_from_path(path=path, reward=reward))
+        return paths_list, rewards
+
+    def get_cost_from_path(self, path: List[int], reward: Callable):
+        path_edges = nx.utils.pairwise(path)
+        path_reward = 0
+        for edge in path_edges:
+            path_reward += reward(self.road_graph.get_edge_data(edge[0], edge[1])['weight'])
+        return path_reward
 
     def get_lanelet_by_position(self, position: np.ndarray) -> int:
+        """
+        Compute lanelet that contains the queried position.
+        :param position: query position
+        """
         for lanelet_id, lanelet_polygon in list(self.road_graph.nodes(data='polygon')):
             if lanelet_polygon.contains_point(position):
                 return lanelet_id
@@ -339,17 +460,15 @@ class RoadGraph:
         except KeyError:
             print("Specified node does not exist.")
 
-    def set_edge_attribute(self, attribute: str, value: Any, edge: Tuple[int,int]) -> None:
+    def set_edge_attribute(self, attribute: str, value: Any, edge: Tuple[int, int]) -> None:
         try:
             self.road_graph.edges[(edge[0], edge[1])][attribute] = value
         except KeyError:
             print("Specified edge does not exist.")
 
-    # Following functions were written but are not currently used.
-    # For now, keep for reference or reusage.
-
+    '''# for now keep for reference
     # naive implementation: depth_limit is just a user-defined integer. May not be the right choice.
-    '''def breadth_first_search(self, source_node: int, depth_limit: int = None) -> DiGraph:
+    def breadth_first_search(self, source_node: int, depth_limit: int = None) -> DiGraph:
         edges = list(bfs_edges(G=self.road_graph, source=source_node, depth_limit=depth_limit))
         return DiGraph(edges)
 
@@ -409,23 +528,34 @@ class DynamicRoadGraph(RoadGraph):
         """
         """
         super().__init__(lanelet_network=lanelet_network, excluded_lanelets=excluded_lanelets)
-        # self.ego_start: Dict[int, Any] = {}  # fixme: what type should Any be
-        # self.ego_goal: Dict[int, Any] = {}  # fixme: what type should Any be
         self.ego_start: Optional[int] = None
         self.ego_goal: Optional[int] = None
         self.ego_problem_updated: bool = False
+
+        # initialize start and goal with initial planning problem
+
         self.locations: Dict[PlayerName, List[Tuple[SimTime, int]]] = {k: [] for k in
                                                                        ['P1', 'Ego']}  # fixme: make general
+        # tbd: architecture design. Pass tuples [(P1,G1), (P1,G2), (P2, G3),...] instead of goals_dict?
+        # self.goal_dict = PredDict.from_dict()
+        # fixme: players should already be somewhere in the dynamic graph!
+        self.predictions: Optional[
+            Prediction] = None  # tbd: better way than overwriting later when we have start/goal/other info?
 
     # get start and goal of ego
     # question: why would we need more than one goal for the ego? Here keep only the first.
     # tbd: may only use one problem instead of a set
-    #tbd: currently called in __init__ of PredAgent.
+    # tbd: currently called in __init__ of PredAgent.
     # Should be called somewhere else in case goals are updated?
     def start_and_goal_info(self, problem: PlanningProblem) -> None:
-        """Get start an goal for ego vehicle a from planning problem of scenario.
-        Write planning problem in self.ego_start and self.ego_goals.
-        If there is more than one goal in planning problem, only keep first."""
+        """
+        Get start an goal for ego vehicle from planning problem of scenario.
+        Write start and goal in self.ego_start and self.ego_goal, respectively.
+        Update of goal and start during simulation is supported
+
+        :param problem: Planning Problem as defined by Commonroad
+        """
+
         start = self.get_lanelet_by_position(problem.initial_state.position)
         self.ego_start = start
         goal = problem.goal.lanelets_of_goal_position
@@ -444,56 +574,186 @@ class DynamicRoadGraph(RoadGraph):
         # there is a new plan
         self.ego_problem_updated = True
         return
-    """def start_and_goal_info(self, problem: PlanningProblem) -> None:
-        Get planning problems for ego vehicle from planning problem set of scenario.
-        Write planning problems as dictionary in self.ego_start and self.ego_goals.
-        If there is more than one goal, only keep first.
-        
-        for problem_id, problem in planning_problem_set.planning_problem_dict.items():
-            start = self.get_lanelet_by_position(problem.initial_state.position)
-            self.ego_start[problem_id] = start
-            goal = problem.goal.lanelets_of_goal_position
-            if goal is not None:
-                self.ego_goal[problem_id] = goal[0][0]  # fixme: keep only first
-            else:
-                next_node = list(self.road_graph.successors(start))
-                self.ego_goal[problem_id] = next_node[
-                    0]  # fixme: only works if there is a node. Nonsense, just to make it run.
-                print("No goal in planning problem set. Goal is set to last lanelet "
-                      "after merging successor of start lanelet.") #fixme: comment is what should be done
-            print("Start of problem with id " + str(problem_id)+":")
-            print(self.ego_start[problem_id])
-            print("Goal of problem with id " + str(problem_id) + ":")
-            print(self.ego_goal[problem_id])
-        return"""
 
-    """def get_start_and_goal_ego(self) -> Dict[int, Tuple[int, int]]:
-
-        planning_problems = {}
-        # todo: this needs to be validated
-        for problem_id, problem in self.planning_problem_set.planning_problem_dict.keys():
-            start: int = self.scenario.lanelet_network.find_lanelet_by_position(
-                problem.initial_state.position)[0][0]
-            goal: int = self.scenario.lanelet_network.find_lanelet_by_position(
-                problem.goal.state_list[0].position)[0][0]
-
-            planning_problems[problem_id] = tuple(start, goal)
-
-        return planning_problems"""
+    def instantiate_prediction_object(self):
+        self.predictions = Prediction(self.get_goals_dict(players=['P1', 'Ego']))  # fixme: make general!!!!!
 
     def update_locations(self, sim_obs: SimObservations):
-        time = sim_obs.time
+        t = sim_obs.time
         for player, player_obs in sim_obs.players.items():
-            player_pos = np.array([player_obs.state.x,
-                                   player_obs.state.y])  # leave out occupancy info for now. #todo: get position from X
-            # question: can go through player_obs directly?
+            # leave out occupancy info for now. #todo: get position from X
+            player_pos = np.array([player_obs.state.x, player_obs.state.y])
             lanelet_id = self.get_lanelet_by_position(player_pos)
-            self.locations[player].append((time, lanelet_id))
+            self.locations[player].append((t, lanelet_id))
         return
 
-    # update location in graph for all players. Need function def find_node_by_position
-    # fixme: could be made quicker by checking if node is the same as before and ending execution if this holds.
-    '''def update_locations(self, sim_obs: SimObservations):
+    def get_past_path(self, player: PlayerName) -> List[int]:
+        """
+        Get past history. Skip repeating nodes.
+
+        :param player: query player
+        """
+        past_path = []
+        previous_id = None
+        for t, current_id in self.locations[player]:
+            if previous_id == current_id:
+                continue
+            past_path.append(current_id)
+            previous_id = current_id
+        return past_path
+
+    # tbd: check this works properly
+    def reachable_goals(self, goals: List[int], player: PlayerName) -> Dict[int, bool]:
+        """
+        From the goals of interest of the Ego, only keep those reachable by a player.
+
+        :param goals: goals of interest for the ego
+        :param player: player for which to compute reachable goals
+        """
+        # latest position of player
+        current_node = self.get_player_location(player)
+        reachability_dict = {}
+
+        for goal in goals:
+            reachability_dict[goal] = self.is_upstream(node_id=current_node, nodes={goal})
+        return reachability_dict
+
+    # tbd: check this does what it should
+    # fixme: make PredDict out of this
+    def get_goals_dict(self, players: List[PlayerName]) -> Dict[PlayerName, Dict[int, bool]]:
+        """
+        Compute reachable goals for each player (apart from Ego) and store in a dictionary.
+        :param players: list of players for which to compute goals
+        """
+        player_dict = {}
+        goals_dict = {}
+
+        # determine goals of interest just outside Ego occupancy
+        goals = []
+        for node_id, node_data in self.road_graph.nodes(data=True):
+            if node_data['goal_of_interest']:
+                goals.append(node_id)
+
+        for player in players:
+            if player.lower() == 'ego':
+                continue
+            reachability_dict = self.reachable_goals(goals=goals,
+                                                     player=player)  # tbd: issue with immutability? Should not
+            for goal, goal_reachable in reachability_dict.items():
+                if goal_reachable:
+                    player_dict[goal] = True  # for now, fill with True. Probabilities will be calculated
+
+            goals_dict[player] = copy(player_dict)
+            player_dict.clear()
+
+        return goals_dict
+
+    # fixme: workaround for reachability update
+    def update_reachability(self, players: List[PlayerName]):
+        # fixme: make function getgoals()
+        for player in players:
+            if player.lower() == 'ego':
+                continue
+            goals = []
+            for node_id, node_data in self.road_graph.nodes(data=True):
+                if node_data['goal_of_interest']:
+                    goals.append(node_id)
+
+            current_node = self.get_player_location(player)
+            for goal in goals:
+                is_reachable = self.is_upstream(node_id=current_node, nodes={goal})
+                self.predictions.reachability_dict.add_datapoint_to_dict(player=player, goal=goal,
+                                                                             data=is_reachable)
+
+    # fixme: find better name
+    def compute_rewards_and_paths(self) -> None:
+        """
+        Compute rewards from t=0 to now, optimal path from now to goal and associated reward,
+        optimal paths from initial position to goal and associated reward. Computation done for all players and all
+        reachable goals.
+        """
+        # fixme: still need to calculate cost up to now.
+        for player, player_goals in self.predictions.reachability_dict.data.items():
+            if player.lower() == 'ego':
+                continue
+            # loop over goals for each player
+            for goal, goal_reachability in player_goals.items():
+                total_reward = []
+                # only consider reachable goals
+                if goal_reachability:
+                    loc = self.get_player_location(player)
+                    # compute optimal path and associated reward from current position to final goal
+                    # if self.is_upstream(node_id=loc, nodes={goal}): # check that shortest path can actually be computed
+                    partial_shortest_paths, rewards = self.shortest_paths_rewards(start_node=loc,
+                                                                                  end_node=goal, reward=self.reward_1)
+                    # compute past path and associated reward (from t=0 to now)
+                    past_path = self.get_past_path(player=player)
+                    past_cost = self.get_cost_from_path(path=past_path, reward=self.reward_1)
+                    # else:
+                    #    print("From node "+ str(loc) +", goal node "+ str(goal) " can't be reached.")
+                    #    path_cost =
+
+                    for reward in rewards:
+                        total_reward.append(reward + past_cost)
+
+                    # compute optimal path and associated reward from initial position to goal
+                    optimal_path, optimal_reward = self.shortest_paths_rewards(self.locations[player][0][1],
+                                                                               end_node=goal, reward=self.reward_1)
+                    # tbd: for now consider only one possible path (total_reward[0])
+                    self.predictions.suboptimal_reward.add_datapoint_to_dict(player=player, goal=goal,
+                                                                             data=total_reward[0])
+                    # fixme: this does not need to be calculated every time
+                    self.predictions.optimal_reward.add_datapoint_to_dict(player=player, goal=goal, data=optimal_reward)
+                # goal is not reachable anymore. Set reward to approx. -Inf
+                else:
+                    self.predictions.suboptimal_reward.add_datapoint_to_dict(player=player, goal=goal,
+                                                                             data=-99999999999.0)
+
+    def compute_goal_probabilities(self) -> None:
+        """
+        Compute probability of each goal for each agent.
+        :param suboptimal_rewards:
+        :param optimal_rewards:
+        :param beta:
+        """
+        # prob_dict is filled with 0.0
+        self.predictions.prob_dict + self.predictions.suboptimal_reward
+        self.predictions.prob_dict - self.predictions.optimal_reward
+        self.predictions.prob_dict * self.predictions.beta
+        self.predictions.prob_dict.apply_function_everywhere(func=np.exp)
+        self.predictions.prob_dict * self.predictions.priors
+        self.predictions.prob_dict.normalize()
+
+        # print("Probabilities predicted:")
+        # print(self.predictions.prob_dict.pred_dict)
+
+        """# ASSUME STUFF ABOVE WILL BE MOVED ELSEWHERE
+        player_prob_dict = {}
+        for player, player_data in self.predictions.prob_dict.items():
+            if player.lower() == 'ego':
+                continue
+            for goal, reward in player_data.items():
+                optimal_reward = self.predictions.optimal_reward[player][goal]
+                optimal_reward = optimal_reward[
+                    0]  # fixme: keeping only first (we assume there is only one for now). Same cheat at next line
+                prob = self.predictions.modified_exponential(optimal_reward=optimal_reward, suboptimal_reward=reward[0])
+                player_prob_dict[goal] = prob
+            self.predictions.probability_dict[player] = copy(player_prob_dict)
+            player_prob_dict.clear()"""
+
+        """# step 4: compute probability depending on 2/3 -> Use Prediction class
+        self.predictions.probab_dict
+        # step 5: multiply with prior -> Use Prediction class
+        for player in goal_dict.keys():
+            prior = self.predictions.compute_prior_probability(n_goals=len(goal_dict[player].keys))
+            self.predictions.priors[player] = self.predictions.compute_prior_probability()
+            prob_after_prior = self.predictions.priors * self.predictions.probab_dict
+            # step 6: normalize -> Use Prediction class
+            prob_after_prior.normalize()  # won't work like this"""
+
+        # update location in graph for all players. Need function def find_node_by_position
+        # fixme: could be made quicker by checking if node is the same as before and ending execution if this holds.
+        '''def update_locations(self, sim_obs: SimObservations):
         for player, player_obs in sim_obs.players:
             attribute = player + "_here"  # fixme: not optimal way to store
             # reset previous positions
@@ -506,6 +766,10 @@ class DynamicRoadGraph(RoadGraph):
 
             self.road_graph.set_node_attribute(attribute=attribute, value=True, node=lanelet_id)
         return'''
+        return
+
+    def get_player_location(self, player: PlayerName):
+        return self.locations[player][-1][1]
 
     def update_dynamic_graph(self) -> None:
         """
@@ -544,7 +808,16 @@ class DynamicRoadGraph(RoadGraph):
         self.ego_problem_updated = False
 
 
+# tbd: is it even needed?
+class PredictionDictionaryIterator:
 
+    def __iter__(self, pred_dict: PredDict):
+        self._index = 0
+        self._pred_dict = pred_dict
+
+    def __next__(self):
+        self._index += 1
+        return
 
 
 if __name__ == '__main__':
@@ -555,6 +828,6 @@ if __name__ == '__main__':
     scenario, planning_problem_sett = CommonRoadFileReader(scenario_path3).open(lanelet_assignment=True)
     net = scenario.lanelet_network
 
-    obj = RoadGraph(lanelet_network=net, planning_problem_set=planning_problem_set)
-    occupancy_nodes, _ = obj.get_possible_resources(start_node=3512, end_node=3450)
-    obj.plot_graph(filename='graph_only', start_node=3512, end_node=3450)
+    # obj = RoadGraph(lanelet_network=net, planning_problem_set=planning_problem_set)
+    # occupancy_nodes, _ = obj.get_possible_resources(start_node=3512, end_node=3450)
+    # obj.plot_graph(filename='graph_only', start_node=3512, end_node=3450)
