@@ -15,6 +15,7 @@ from matplotlib.patches import Polygon, Circle, Patch
 
 from dg_commons import Color
 from dg_commons import PlayerName, X, U
+from dg_commons.maps.shapely_viz import ShapelyViz
 from dg_commons.planning.trajectory import Trajectory
 from dg_commons.sim.models.pedestrian import PedestrianState, PedestrianGeometry
 from dg_commons.sim.models.vehicle import VehicleState, VehicleGeometry
@@ -56,14 +57,17 @@ class SimRenderer(SimRendererABC):
         self.sim_context = sim_context
         self.commonroad_renderer: MPRenderer = MPRenderer(ax=ax, *args, **kwargs)
         self.current_patchcollection = None
+        self.shapely_viz = ShapelyViz(ax=self.commonroad_renderer.ax)
 
     @contextmanager
     def plot_arena(self, ax: Axes):
-        # planning_problem_set.draw(rnd)
-        self.sim_context.scenario.lanelet_network.draw(
-            self.commonroad_renderer, draw_params={"traffic_light": {"draw_traffic_lights": False}}
-        )
-        self.commonroad_renderer.render()
+        if self.sim_context.dg_scenario.scenario:
+            self.sim_context.dg_scenario.lanelet_network.draw(
+                self.commonroad_renderer, draw_params={"traffic_light": {"draw_traffic_lights": False}}
+            )
+            self.commonroad_renderer.render()
+        for s_obstacle in self.sim_context.dg_scenario.static_obstacles.values():
+            self.shapely_viz.add_shape(s_obstacle.shape, color=s_obstacle.geometry.color)
         yield
 
     def plot_player(
