@@ -1,36 +1,39 @@
 import copy
+import itertools
 import math
 import numpy as np
 from geometry import SE2_from_translation_angle, SE2value
 from dg_commons.sim.models.vehicle import VehicleGeometry
 from dg_commons.sim.models.vehicle_utils import VehicleParameters
-from typing import Tuple
+from typing import Tuple, List
 from dg_commons import U
 from dataclasses import dataclass
 from dg_commons_dev.utils import BaseParams
 from dg_commons_dev.state_estimators.estimator_types import Estimator
 from dg_commons_dev.state_estimators.utils import PDistributionDisParams, PDistributionDis, \
-    Poisson, PoissonParams, GridTwoD
+    Poisson, PoissonParams, CircularGrid
 from dg_commons_dev.state_estimators.temp_curve import PCurve
 from dg_commons.sim.models.vehicle import VehicleModel, VehicleState, VehicleCommands
 from decimal import Decimal
 from dg_commons.geo import SE2_apply_T2
 import matplotlib.pyplot as plt
 import matplotlib.animation as animation
+from itertools import product
 
-lx = 0.5
-""" Grid box length in x-direction """
-ly = 0.5
-""" Grid box length in y-direction """
-lx_total = 5
-""" Grid length in x-direction """
-ly_total = 5
-""" Grid length in y-direction """
-A_obstacle = 1
-""" Area occupied by obstacles inside the grid """
+radius: float = 10
+""" Radius of the circular grid considered """
+point_density: float = 10
+""" Density of points on a line [1/m] """
+n_lines: int = 10
+""" Number of lines """
+n_points: int = math.floor(point_density*radius)
+""" Number of points on a line """
 
-area = lx_total * ly_total
-lamb = lx * ly * A_obstacle / area
+average_ratio: float = 1/100
+""" Average ratio (area of obstacle) / (area total) """
+lamb = average_ratio * radius
+""" Lambda for Poisson distribution """
+# TODO: should be distance-dependent and should be dependent of grid cell area
 
 
 @dataclass
@@ -48,10 +51,14 @@ class ObstacleBayesianParam(BaseParams):
     acc_distribution: PCurve = PCurve(0.05)
     """ Acc distribution """
 
-    grid_size: Tuple[float, float] = (lx_total, ly_total)
-    """ x- and y-size of the grid wrt vehicle """
-    grid_shape: Tuple[int, int] = (int(lx_total/lx), int(ly_total/ly))
-    """ x- and y-size of a grid box """
+    grid_radius: float = radius
+    """ Radius of circular grid considered """
+    n_points: int = n_points
+    """ Number of points on a line """
+    n_lines: int = n_lines
+    """ Number of lines """
+    distance_to_first_ring: float = 2
+    """ Distance from center of lidar to first detection ring """
 
     geometry_params: VehicleGeometry = VehicleGeometry.default_car()
     """ Vehicle Geometry """
@@ -74,13 +81,27 @@ class ObstacleBayesian(Estimator):
         self.prior_distribution = self.params.prior_distribution(self.params.prior_distribution_params)
         self.prior_p = self.prior_distribution.pmf(1)
 
-        values = self._values = np.array([[self.prior_p] * self.params.grid_shape[1]] * self.params.grid_shape[0])
-        self.current_belief = GridTwoD(self.params.grid_size[0], self.params.grid_shape[0],
-                                       self.params.grid_size[1], self.params.grid_shape[1], values)
+        self._values = np.array([[self.prior_p] * self.params.n_points] * self.params.n_lines)
+        self.current_belief = CircularGrid(self.params.grid_radius, self.params.n_points,
+                                           self.params.n_lines, self.params.distance_to_first_ring,
+                                           self._values)
+
+        self.fn = copy.deepcopy(self.current_belief)
+        self.fp = copy.deepcopy(self.current_belief)
+        self.acc = copy.deepcopy(self.current_belief)
+        self.pos_x = self.current_belief.pos_x
+        self.pos_y = self.current_belief.pos_y
+        for idx, position in self.current_belief.gen_structure():
+            self.fn.set(idx, self.params.fn_distribution.evaluate_distribution(np.array(position)))
+            self.fp.set(idx, self.params.fp_distribution.evaluate_distribution(np.array(position)))
+            self.acc.set(idx, self.params.acc_distribution.evaluate_distribution(np.array(position)))
+
+        acc_areas = 4 * np.power(self.acc.as_numpy(), 2)
+        acc_areas = np.where(acc_areas > 0, acc_areas, 10e-8)
+        self.p_detection_given_origin = np.where(acc_areas > 0, np.divide(1, acc_areas), 0)
+
         self.data = []
         self.poses = []
-        self.height_of_interest = \
-            self.current_belief.width_grid.nodes[math.ceil(len(self.current_belief.width_grid.nodes)/2)-1]
 
     def update_prediction(self, u_k: U) -> None:
         """
@@ -100,67 +121,118 @@ class ObstacleBayesian(Estimator):
         delta_se2 = SE2_from_translation_angle(np.array([-delta_state.x, -delta_state.y]), -delta_state.theta)
 
         current_belief = copy.deepcopy(self.current_belief)
-        for x_val in current_belief.length_grid.nodes:
-            for y_val in current_belief.width_grid.nodes:
-                old_position = list(SE2_apply_T2(delta_se2, np.array([x_val, y_val])))
+        for idx, position in current_belief.gen_structure():
+            old_position = list(SE2_apply_T2(delta_se2, position))
 
-                try:
-                    val = current_belief.value_by_position(old_position)
-                except AssertionError:
-                    val = self.prior_p
+            try:
+                val = current_belief.value_by_position(old_position)
+            except AssertionError:
+                val = self.prior_p
 
-                indices = current_belief.index_by_position([x_val, y_val])
-                assert abs(int(indices[0]) - indices[0]) < 10e-6 and abs(int(indices[1]) - indices[1]) < 10e-6
-                indices = (int(indices[0]), int(indices[1]))
+            self.current_belief.set(idx, val)
 
-                self.current_belief.set(indices, val)
-
-    def update_measurement(self, measurement_k: GridTwoD, my_current_pose: SE2value) -> None:
-        """
-        Internal current belief gets updated based on measurement at time step k. The measurement consists of a grid the
-        same size as current belief and storing 1 at each node, where the lidar detected an obstacle and 0 otherwise.
-        @param measurement_k: kth system measurement
-        @param my_current_pose: Temporary parameter for plotting purposes, TODO: move somewhere else
-        @return: None
-        """
-        self.data.append([])
+    def update_measurement(self, detections: List[Tuple[float, float]], my_current_pose: SE2value) -> None:
         self.poses.append(my_current_pose)
-        assert len(self.current_belief.width_grid.nodes) == len(measurement_k.width_grid.nodes)
-        assert len(self.current_belief.length_grid.nodes) == len(measurement_k.length_grid.nodes)
+        # For plotting purposes
 
-        current_belief = copy.deepcopy(self.current_belief)
+        current_belief: CircularGrid = copy.deepcopy(self.current_belief)
 
-        for x_val in current_belief.length_grid.nodes:
-            for y_val in current_belief.width_grid.nodes:
-                position = [x_val, y_val]
-                indices = current_belief.index_by_position(position)
-                assert abs(int(indices[0]) - indices[0]) < 10e-6 and abs(int(indices[1]) - indices[1]) < 10e-6
-                indices = (int(indices[0]), int(indices[1]))
+        fn = self.fn.as_numpy()
+        fp = self.fp.as_numpy()
+        current_b = current_belief.as_numpy()
 
-                fn_p: float = self.params.fn_distribution.evaluate_distribution(np.array(position))
-                fp_p: float = self.params.fp_distribution.evaluate_distribution(np.array(position))
-                acc_p: float = self.params.acc_distribution.evaluate_distribution(np.array(position))
+        mat = self.p_did_not_cause_any_given_d_only(detections)
+        num = np.multiply(1-fn, current_b)
+        den = num + np.multiply(fp, 1-current_b)
+        p_obs_given_causing = np.divide(num, den)
 
-                prior = current_belief.value_by_index(indices)
-                if measurement_k.value_by_position(position) == 1:
-                    res = (1 - fn_p) * prior / ((1 - fn_p) * prior + fp_p * (1 - prior))
-                    # res = 1  # Only and absolutely believe in measurement
-                else:
-                    res = fn_p * prior / (fn_p * prior + (1-fp_p) * (1 - prior))
-                    # res = 0  # Only and absolutely believe in measurement
-                if y_val == self.height_of_interest:
-                    self.data[-1].append(res)
+        num = np.multiply(fn, current_b)
+        den = num + np.multiply(1-fp, 1 - current_b)
+        p_obs_given_not_causing = np.divide(num, den)
 
-                self.current_belief.set(indices, res)
+        result = np.multiply(p_obs_given_causing, 1-mat) + np.multiply(p_obs_given_not_causing, mat)
+        self.current_belief.values = result
+        val_of_interest = result[0, :]
+
+        self.data.append(val_of_interest.tolist())
+
+    def p_did_not_cause_any_given_d_only(self, detections: List[Tuple[float, float]]):
+        acc = self.acc.as_numpy()
+        shape = acc.shape
+
+        involvement = {}
+        candidates = []
+
+        for detection in detections:
+            in_accuracy: np.ndarray = np.where((self.pos_x - acc <= detection[0]) & (detection[0] <= self.pos_x + acc) &
+                                               (self.pos_y - acc <= detection[1]) & (detection[1] <= self.pos_y + acc),
+                                               self.p_detection_given_origin, 0)
+            candidates_i = np.nonzero(in_accuracy)
+            candidates.append(list(zip(list(candidates_i[0]), list(candidates_i[1]))))
+
+            sum_acc_prob: float = float(np.sum(in_accuracy))
+            in_accuracy = in_accuracy / sum_acc_prob if sum_acc_prob != 0 else in_accuracy
+
+            involvement[detection] = in_accuracy
+
+        def helper_fct(nth: int, idx: Tuple[int, int]):
+            my_detection = detections[nth]
+            candidate_of_interest = []
+
+            idx_to_consider = []
+            threshold = 1.0
+            for i in range(nth-1):
+                other_detection = detections[i]
+                dist = np.linalg.norm(np.array([my_detection[0] - other_detection[0],
+                                                my_detection[1] - other_detection[1]]))
+                if dist <= threshold:
+                    candidate_of_interest.append(candidates[i])
+                    idx_to_consider.append(i)
+
+            pairs = itertools.product(*candidate_of_interest)
+
+            value = 0
+            for count1, pair in enumerate(pairs):
+                val = 1
+                for count2, element in enumerate(pair):
+                    # helper = 1 - previous_results[:, :, count2]
+                    total_p = 1
+                    helper = list(involvement.values())[idx_to_consider[count2]]
+                    total_p -= helper[idx]
+                    helper[idx] = 0
+                    for i in range(count2):
+                        pair_of_interest = pair[i]
+                        total_p -= helper[pair_of_interest]
+                        helper[pair_of_interest] = 0
+
+                    val *= helper[element] / total_p if total_p != 0 else 0
+
+                total_p = 1
+                helper = involvement[detection]
+                for element in pair:
+                    total_p -= helper[element]
+                    helper[element] = 0
+
+                val *= 1 - helper[idx] / total_p if total_p != 0 else 1
+                value += val
+            return value
+
+        p_matrices = np.ones(shape + (len(detections),))
+        for nth, detection in enumerate(detections):
+            for idx in candidates[nth]:
+                p_matrices[idx + (nth, )] = helper_fct(nth, idx)
+
+        mat = np.prod(p_matrices, axis=2)
+        return mat
 
     def simulation_ended(self):
         fig, ax = plt.subplots()
-        ax.set_xlabel('Longitudinal position [m] (car perspective)')
+        ax.set_xlabel('Longitudinal position [m]')
         ax.set_ylabel('Probability of obstacle')
         ax.set(ylim=(0, 1), xlim=(30, 70))
 
-        n_x = len(self.current_belief.length_grid.nodes)
-        x_values = self.current_belief.length_grid.nodes
+        n_x = self.current_belief.n_points
+        x_values = self.pos_x[0, :]
         n_t = len(self.data)
 
         line, = ax.plot(np.array(x_values), np.zeros(n_x))
@@ -169,7 +241,7 @@ class ObstacleBayesian(Estimator):
 
         def animate(i):
             pose = self.poses[i]
-            x_values_world = [SE2_apply_T2(pose, np.array([val, self.height_of_interest]))[0] for val in x_values]
+            x_values_world = [SE2_apply_T2(pose, np.array([val, 0]))[0] for val in x_values]
             line.set_xdata(x_values_world)
             line.set_ydata(np.array(self.data[i]))  # update the data.
             txt.set_text(str(round(i*0.05, 1)) + "s")
@@ -181,24 +253,3 @@ class ObstacleBayesian(Estimator):
         writer = animation.PillowWriter(
                     fps=20, metadata=dict(artist='Me'), bitrate=1800)
         ani.save("test.gif", writer=writer)
-
-        '''fig = plt.figure()
-        ax = plt.axes(projection='3d')
-
-        n_x = len(self.data[0])
-        n_t = len(self.data)
-
-        x_data = np.array(list(range(n_x)))
-        t_data = np.array(list(range(n_t)))
-
-        X, T = np.meshgrid(x_data, t_data)
-        p_data = np.array(self.data)
-
-        ax.set_xlabel('Longitudinal position')
-        ax.set_ylabel('time')
-        ax.set_zlabel('Probability of obstacle')
-
-        ax.plot_surface(X, T, p_data, rstride=1, cstride=1,
-                        cmap='viridis', edgecolor='none')
-        ax.set_title('P-Distribution at y = 0')
-        plt.savefig('test')'''

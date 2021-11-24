@@ -255,7 +255,7 @@ class GridTwoD:
         """
         Values setter enforcing correct dimensions
         """
-        assert values.shape == (len(self.length_grid.nodes), len(self.width_grid.nodes))
+        assert (values.shape[0], values.shape[1]) == (len(self.length_grid.nodes), len(self.width_grid.nodes))
         self._values = values
 
     def set(self, idx: Tuple[int, int], value: float):
@@ -329,6 +329,207 @@ class GridTwoD:
 
         idx = self.index_by_position(pos)
         return self.value_by_index(idx)
+
+
+class CircularGrid:
+    """ Manages circular grid of values"""
+
+    def __init__(self, radius: float, n_point_per_line: int, n_lines: int, d_first_ring: float,
+                 values: np.ndarray = None):
+        self.radius = radius
+        self.n_lines = n_lines
+        self.n_points = n_point_per_line
+        self.area: float = radius ** 2 * math.pi
+
+        self.degrees = np.linspace(0, 2 * math.pi, n_lines + 1)[:-1]
+        self.distances = np.linspace(d_first_ring, radius, n_point_per_line)
+
+        self._pos_x = np.zeros((n_lines, n_point_per_line))
+        self._pos_y = np.zeros((n_lines, n_point_per_line))
+        for i in range(n_lines):
+            for j in range(n_point_per_line):
+                self._pos_x[i, j] = math.cos(self.degrees[i]) * self.distances[j]
+                self._pos_y[i, j] = math.sin(self.degrees[i]) * self.distances[j]
+
+        if values is not None:
+            assert values.shape == (n_lines, n_point_per_line)
+            self._values: np.ndarray = values
+        else:
+            self._values = np.zeros((n_lines, n_point_per_line))
+
+    @property
+    def values(self) -> np.ndarray:
+        """
+        Values getter
+        @return: Values
+        """
+        return self._values
+
+    def as_numpy(self) -> np.ndarray:
+        """
+        @return: Values as numpy array
+        """
+        return np.array(self.values)
+
+    @property
+    def pos_x(self):
+        """
+        pos_x getter
+        @return: x positions
+        """
+        return self._pos_x
+
+    @property
+    def pos_y(self):
+        """
+        pos_y getter
+        @return: y positions
+        """
+        return self._pos_y
+
+    @values.setter
+    def values(self, values: np.ndarray):
+        """
+        Values setter enforcing correct dimensions
+        """
+        assert (values.shape[0], values.shape[1]) == (self.n_lines, self.n_points)
+        self._values = values
+
+    def set(self, idx: Tuple[int, int], value: float):
+        """
+        Set the value of a grid node
+        @param idx: Theta-Index and dist-Index of the node
+        @param value: Value to set
+        """
+        assert isinstance(idx[0], int)
+        assert isinstance(idx[1], int)
+        self._values[idx[0], idx[1]] = value
+
+    def index_by_position(self, pos: List[float]) -> Tuple[float, float]:
+        """
+        Returns theta- and distance-indices corresponding to current position
+        @param pos: Position of interest
+        @return: Interpolated indices
+        """
+        assert self.conservative_in(np.array(pos))
+
+        dist = np.linalg.norm(np.array(pos))
+        theta = math.atan2(pos[1], pos[0])
+        theta = theta + 2 * math.pi if theta < 0 else theta
+
+        upper_theta = np.argmax(self.degrees >= theta)
+        if self.degrees[upper_theta] == theta or upper_theta == 0:
+            idx_theta = upper_theta
+        else:
+            lower_theta = upper_theta - 1
+            idx_theta = lower_theta + (theta - self.degrees[lower_theta]) / \
+                (self.degrees[upper_theta] - self.degrees[lower_theta])
+
+        upper_d = np.argmax(self.distances >= dist)
+        if self.distances[upper_d] == dist or upper_d == 0:
+            idx_d = upper_d
+        else:
+            lower_d = upper_d - 1
+            idx_d = lower_d + (dist - self.distances[lower_d]) / \
+                (self.distances[upper_d] - self.distances[lower_d])
+
+        return idx_theta, idx_d
+
+    def position_by_index(self, idx: Tuple[float, float]) -> Tuple[float, float]:
+        """
+        Returns x- and y-indices corresponding to current position
+        @param idx: Theta-index and Distance-index of interest
+        @return: Interpolated position
+        """
+        assert 0 <= idx[0] <= self.n_lines-1
+        assert 0 <= idx[1] <= self.n_points-1
+
+        lower_theta, upper_theta = math.floor(idx[0]), math.ceil(idx[0])
+        lower_d, upper_d = math.floor(idx[1]), math.ceil(idx[1])
+
+        theta = self.degrees[lower_theta]
+        if lower_theta != upper_theta:
+            delta_theta = idx[0] - lower_theta
+            theta += delta_theta * (self.degrees[upper_theta] - self.degrees[lower_theta]) / (upper_theta - lower_theta)
+
+        distance = self.distances[lower_d]
+        if lower_d != upper_d:
+            delta_d = idx[1] - lower_d
+            distance += delta_d * (self.distances[upper_d] - self.distances[lower_d]) / (upper_d - lower_d)
+
+        pos_x = math.cos(theta) * distance
+        pos_y = math.sin(theta) * distance
+        return pos_x, pos_y
+
+    def value_by_index(self, idx: Tuple[float, float]) -> float:
+        """
+        Returns value corresponding to passed indices
+        @param idx: Theta-index and Distance-index of interest
+        @return: Value at the passed indices
+        """
+        assert 0 <= idx[0] <= self.n_lines-1
+        assert 0 <= idx[1] <= self.n_points-1
+
+        lower_theta, upper_theta = int(idx[0]), int(idx[0]) + 1
+        lower_d, upper_d = int(idx[1]), int(idx[1]) + 1
+
+        idx_theta = [lower_theta, upper_theta]
+        idx_d = [lower_d, upper_d]
+        if not upper_theta <= self.n_lines - 1:
+            idx_theta = [lower_theta-1, lower_theta]
+        if not upper_d <= self.n_points - 1:
+            idx_d = [lower_d-1, lower_d]
+
+        indices = itertools.product(idx_theta, idx_d)
+
+        values, xs, ys = [], [], []
+        for idx_pair in indices:
+            values.append(self.values[idx_pair[0], idx_pair[1]])
+            pos = self.position_by_index(idx_pair)
+            xs.append(pos[0])
+            ys.append(pos[1])
+
+        assert all([val is not None for val in values])
+        pos_of_interest = self.position_by_index(idx)
+
+        points = np.array((np.array(xs).flatten(), np.array(ys).flatten())).T
+        values = np.array(values).flatten()
+
+        res = float(griddata(points, values, (pos_of_interest[0], pos_of_interest[1])))
+
+        return res
+
+    def value_by_position(self, pos: List[float]) -> float:
+        """
+        Returns interpolated value corresponding to passed position
+        @param pos: position of interest
+        @return: Value at the passed position
+        """
+        assert self.conservative_in(np.array(pos))
+
+        idx = self.index_by_position(pos)
+        return self.value_by_index(idx)
+
+    def gen_structure(self):
+        """
+        Generator yielding elements of the grid structure:
+
+        for each degree:
+            for each distance:
+                yield corresponding index and x- and y-position
+        """
+        for i in range(self.n_lines):
+            for j in range(self.n_points):
+                idx: Tuple[int, int] = (i, j)
+                position = np.array([self.pos_x[i, j], self.pos_y[i, j]])
+                yield idx, position
+
+    def conservative_in(self, pos: np.ndarray) -> bool:
+        """
+        @return: whether a passed position is conservately inside the equilateral polygon
+        """
+        distance = np.linalg.norm(pos)
+        return distance < self.radius * math.cos(self.degrees[1]/2)
 
 
 PDistribution = Union[Exponential]
