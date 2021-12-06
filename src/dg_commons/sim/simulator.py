@@ -64,6 +64,7 @@ class Simulator:
         logger.info("Completed simulation. Writing logs...")
         for player_name in sim_context.players:
             sim_context.log[player_name] = self.simlogger[player_name].as_sequence()
+            sim_context.players[player_name].on_episode_end()  # fixme: temporary workaround
         logger.info("Writing logs terminated.")
 
     def pre_update(self, sim_context: SimContext):

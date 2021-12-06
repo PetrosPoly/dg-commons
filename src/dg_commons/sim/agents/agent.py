@@ -31,6 +31,10 @@ class Agent(ABC):
           To return something only at certain timestamps simply return None in the others."""
         pass
 
+    def on_episode_end(self):
+        """This method will get called once for each player at the beginning of the simulation"""
+        pass
+
 
 class NPAgent(Agent):
     """
