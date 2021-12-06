@@ -2,6 +2,7 @@ from geometry import T2value
 import random
 import numpy as np
 import math
+import matplotlib.pyplot as plt
 
 
 class PCurve:
@@ -22,6 +23,15 @@ class PCurve:
         @return: Probability of event
         """
         pseudo_distance = np.linalg.norm(rel_pos) * self.conv_speed
+        return math.atan(pseudo_distance) / math.pi * 2 * self.conv_val
+
+    def evaluate_distribution_dist(self, dist: float) -> float:
+        """
+        Evaluate distribution
+        @param dist: Relative position
+        @return: Probability of event
+        """
+        pseudo_distance = dist * self.conv_speed
         return math.atan(pseudo_distance) / math.pi * 2 * self.conv_val
 
     def sample(self, rel_pos: T2value) -> bool:

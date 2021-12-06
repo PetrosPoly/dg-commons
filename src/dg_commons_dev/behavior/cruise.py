@@ -121,7 +121,7 @@ class Cruise(Situation[SituationObservations, CruiseDescription]):
         @param vel: Current velocity
         @return: Distance
         """
-        return vel * self.safety_time_braking * 2 + self.params.min_safety_distance
+        return vel * self.safety_time_braking + self.params.min_safety_distance
 
     def _get_look_ahead_time(self, vel: float) -> float:
         """

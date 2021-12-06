@@ -140,7 +140,7 @@ def create_animation(
     def update_plot(frame: int = 0):
         t: float = frame * dt / 1000.0
         logger.info(f"Plotting t = {t}\r")
-        log_at_t: Mapping[PlayerName, LogEntry] = sim_context.log.at_interp(t)
+        log_at_t: Mapping[PlayerName, LogEntry] = sim_context.log.at_interp(t + 10e-6)
         for pname, box_handle in states.items():
             lights_colors: LightsColors = get_lights_colors_from_cmds(log_at_t[pname].commands, t=t)
             states[pname], actions[pname] = sim_viz.plot_player(

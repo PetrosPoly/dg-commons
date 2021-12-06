@@ -6,6 +6,7 @@ import numpy as np
 import itertools
 from dg_commons_dev.utils import BaseParams
 from scipy.interpolate import griddata
+from shapely.geometry import Point
 
 
 @dataclass
@@ -339,23 +340,46 @@ class CircularGrid:
         self.radius = radius
         self.n_lines = n_lines
         self.n_points = n_point_per_line
-        self.area: float = radius ** 2 * math.pi
+
+        self.area: float = radius ** 2 * math.pi - d_first_ring ** 2 * math.pi
 
         self.degrees = np.linspace(0, 2 * math.pi, n_lines + 1)[:-1]
         self.distances = np.linspace(d_first_ring, radius, n_point_per_line)
+        self.delta_ang = self.degrees[1] - self.degrees[0]
+        self.delta_d = self.distances[1] - self.distances[0]
 
         self._pos_x = np.zeros((n_lines, n_point_per_line))
         self._pos_y = np.zeros((n_lines, n_point_per_line))
+        self._areas = np.zeros((n_lines, n_point_per_line))
         for i in range(n_lines):
             for j in range(n_point_per_line):
                 self._pos_x[i, j] = math.cos(self.degrees[i]) * self.distances[j]
                 self._pos_y[i, j] = math.sin(self.degrees[i]) * self.distances[j]
+                self._areas[i, j] = (self.distances[j] + self.delta_d / 2) ** 2 * self.delta_ang / 2 - \
+                    (self.distances[j] - self.delta_d / 2) ** 2 * self.delta_ang / 2
 
         if values is not None:
             assert values.shape == (n_lines, n_point_per_line)
             self._values: np.ndarray = values
         else:
             self._values = np.zeros((n_lines, n_point_per_line))
+
+        self.ext_radius = np.amin(np.linalg.norm(np.column_stack((self._pos_x[:, -1], self._pos_y[:, -1])), axis=1))
+        self.int_radius = np.amax(np.linalg.norm(np.column_stack((self._pos_x[:, 0], self._pos_y[:, 0])), axis=1))
+
+        safety_against_numerical_errors = 0.95
+        self.ext_radius *= math.cos(self.delta_ang/2) * safety_against_numerical_errors
+        self.int_radius *= 1 / safety_against_numerical_errors
+        outer_circle: Point = Point((0, 0)).buffer(self.ext_radius)
+        inner_circle: Point = Point((0, 0)).buffer(self.int_radius)
+        self.circle = outer_circle.difference(inner_circle)
+        """ This hollow circle describes conservatively the room occupied by the equilateral polygon of measurements """
+
+        self._griddata_positions = np.zeros((n_lines * n_point_per_line, 2))
+        self._griddata_values = np.zeros((n_lines * n_point_per_line, 1))
+        for i, out in enumerate(self.gen_structure()):
+            self._griddata_positions[i, :] = out[1]
+            self._griddata_values[i] = self._values[out[0]]
 
     @property
     def values(self) -> np.ndarray:
@@ -387,6 +411,14 @@ class CircularGrid:
         """
         return self._pos_y
 
+    @property
+    def areas(self):
+        """
+        pos_y getter
+        @return: y positions
+        """
+        return self._areas
+
     @values.setter
     def values(self, values: np.ndarray):
         """
@@ -394,6 +426,9 @@ class CircularGrid:
         """
         assert (values.shape[0], values.shape[1]) == (self.n_lines, self.n_points)
         self._values = values
+        self._griddata_values = np.zeros((self._values.shape[0] * self._values.shape[1], 1))
+        for i, out in enumerate(self.gen_structure()):
+            self._griddata_values[i] = self._values[out[0]]
 
     def set(self, idx: Tuple[int, int], value: float):
         """
@@ -411,28 +446,34 @@ class CircularGrid:
         @param pos: Position of interest
         @return: Interpolated indices
         """
-        assert self.conservative_in(np.array(pos))
-
         dist = np.linalg.norm(np.array(pos))
-        theta = math.atan2(pos[1], pos[0])
-        theta = theta + 2 * math.pi if theta < 0 else theta
+        theta = np.arctan2(pos[1], pos[0])
+        theta = np.where(theta < 0, theta + 2 * math.pi, theta)
 
-        upper_theta = np.argmax(self.degrees >= theta)
-        if self.degrees[upper_theta] == theta or upper_theta == 0:
-            idx_theta = upper_theta
+        idx = (np.abs(self.degrees - theta)).argmin()
+        if self.degrees[idx] == theta:
+            idx_theta = idx
+        elif self.degrees[idx] < theta:
+            assert idx + 1 <= len(self.degrees)
+            if idx + 1 == len(self.degrees):
+                upper_idx = 0
+            else:
+                upper_idx = idx + 1
+
+            idx_theta = idx + (theta - self.degrees[idx]) / (self.degrees[upper_idx] - self.degrees[idx])
         else:
-            lower_theta = upper_theta - 1
-            idx_theta = lower_theta + (theta - self.degrees[lower_theta]) / \
-                (self.degrees[upper_theta] - self.degrees[lower_theta])
+            assert idx - 1 >= 0
+            idx_theta = idx + (theta - self.degrees[idx]) / (self.degrees[idx] - self.degrees[idx-1])
 
-        upper_d = np.argmax(self.distances >= dist)
-        if self.distances[upper_d] == dist or upper_d == 0:
-            idx_d = upper_d
+        idx = (np.abs(self.distances - dist)).argmin()
+        if self.distances[idx] == dist:
+            idx_d = idx
+        elif self.distances[idx] < dist:
+            assert idx + 1 < len(self.distances)
+            idx_d = idx + (dist - self.distances[idx]) / (self.distances[idx + 1] - self.distances[idx])
         else:
-            lower_d = upper_d - 1
-            idx_d = lower_d + (dist - self.distances[lower_d]) / \
-                (self.distances[upper_d] - self.distances[lower_d])
-
+            assert idx - 1 >= 0
+            idx_d = idx + (dist - self.distances[idx]) / (self.distances[idx] - self.distances[idx-1])
         return idx_theta, idx_d
 
     def position_by_index(self, idx: Tuple[float, float]) -> Tuple[float, float]:
@@ -494,8 +535,18 @@ class CircularGrid:
 
         points = np.array((np.array(xs).flatten(), np.array(ys).flatten())).T
         values = np.array(values).flatten()
-
         res = float(griddata(points, values, (pos_of_interest[0], pos_of_interest[1])))
+
+        if np.isnan(res):
+            central_point = np.sum(points, axis=0) / 4
+
+            n = 10
+            for i in range(n):
+                vec_to_center = (central_point - pos_of_interest)
+                pos_of_interest = pos_of_interest + vec_to_center/n
+                res = float(griddata(points, values, (pos_of_interest[0], pos_of_interest[1])))
+                if not np.isnan(res):
+                    break
 
         return res
 
@@ -505,10 +556,26 @@ class CircularGrid:
         @param pos: position of interest
         @return: Value at the passed position
         """
-        assert self.conservative_in(np.array(pos))
 
         idx = self.index_by_position(pos)
-        return self.value_by_index(idx)
+        res = self.value_by_index(idx)
+
+        return res
+
+    def values_by_positions(self, pos: np.ndarray, if_nan: float = None) -> np.ndarray:
+        """
+        Returns interpolated values corresponding to passed positions. If multiple interpolations need to be
+        performed, this version is much more efficient than multiple calls of value_by_position.
+        @param pos: (m, D) positions of interest
+        @param if_nan: Value to set for query points outside of the convex hull of the input points
+        @return: (m, 1) values of interest
+        """
+        if if_nan:
+            res = griddata(self._griddata_positions, self._griddata_values, pos, fill_value=if_nan)
+        else:
+            res = griddata(self._griddata_positions, self._griddata_values, pos)
+
+        return res
 
     def gen_structure(self):
         """
@@ -524,12 +591,12 @@ class CircularGrid:
                 position = np.array([self.pos_x[i, j], self.pos_y[i, j]])
                 yield idx, position
 
-    def conservative_in(self, pos: np.ndarray) -> bool:
+    def is_in(self, pos: np.ndarray) -> bool:
         """
-        @return: whether a passed position is conservately inside the equilateral polygon
+        @param: Position to be checked
+        @return: Whether a passed position is inside the equilateral polygon
         """
-        distance = np.linalg.norm(pos)
-        return distance < self.radius * math.cos(self.degrees[1]/2)
+        return self.int_radius < np.linalg.norm(pos) < self.ext_radius
 
 
 PDistribution = Union[Exponential]

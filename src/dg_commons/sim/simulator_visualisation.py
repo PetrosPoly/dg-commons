@@ -48,6 +48,7 @@ class ZOrders(IntEnum):
     TRAJECTORY = 45
     TRAJECTORY_MARKER = 46
     TIME_TEXT = 50
+    ENV_OBSTACLE = 31
 
 
 class SimRenderer(SimRendererABC):
@@ -67,7 +68,7 @@ class SimRenderer(SimRendererABC):
             )
             self.commonroad_renderer.render()
         for s_obstacle in self.sim_context.dg_scenario.static_obstacles.values():
-            self.shapely_viz.add_shape(s_obstacle.shape, color=s_obstacle.geometry.color)
+            self.shapely_viz.add_shape(s_obstacle.shape, color=s_obstacle.geometry.color, zorder=ZOrders.ENV_OBSTACLE)
         yield
 
     def plot_player(
