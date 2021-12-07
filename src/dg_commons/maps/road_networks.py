@@ -6,134 +6,21 @@ import numpy as np
 from commonroad.scenario.lanelet import LaneletNetwork, Lanelet
 from commonroad.planning.planning_problem import PlanningProblem
 from commonroad.common.file_reader import CommonRoadFileReader
-from dataclasses import dataclass
 import matplotlib.pyplot as plt
 from matplotlib.axes import Axes
 from matplotlib.collections import PathCollection, LineCollection
 from dg_commons.sim import SimObservations, SimTime
 from dg_commons import PlayerName
 from copy import copy, deepcopy
-from shapely.geometry import shape, Polygon, LinearRing
+from shapely.geometry import Polygon, LinearRing, Point
 from shapely.strtree import STRtree
-from shapely.affinity import scale, rotate
 import math
 from commonroad.visualization.mp_renderer import MPRenderer
+from utils import interpolate1d, interpolate2d, \
+    get_intermediate_points, get_point_from_beta_2d, get_beta_in_distance_vector  # fixme: import all
 
+# naming of resources from lanelets
 resource_id_factor = 100
-
-def interpolate2d(fraction: float, points: [[float, float], [float, float]]) -> [float, float]:
-    """
-    Simple interpolation between two points in 2D.
-    """
-    assert 0.0 <= fraction <= 1.0, "You can only interpolate with a fraction between 0.0 and 1.0"
-    x_new = fraction * (points[1][0] - points[0][0]) + points[0][0]
-    y_new = fraction * (points[1][1] - points[0][1]) + points[0][1]
-    return x_new, y_new
-
-
-def interpolate1d(fraction: float, points: [float, float]) -> float:
-    """
-    Simple interpolation between two points in 1D.
-    """
-    assert 0.0 <= fraction <= 1.0, "You can only interpolate with a fraction between 0.0 and 1.0"
-    x_new = fraction * (points[1] - points[0]) + points[0]
-    return x_new
-
-
-# fixme: find input and return types
-def get_intermediate_points(previous_beta: float, beta: float, distance_vector: np.ndarray,
-                            points_left: np.ndarray, points_right: np.ndarray) -> np.ndarray:
-    delta = 1.0 / float(len(distance_vector))
-    remainder = beta % delta
-    remainder = remainder / delta
-    divisor = beta // delta
-    previous_divisor = previous_beta // delta
-    intermediate_points = []
-    if divisor == previous_divisor:
-        pass
-    elif divisor > previous_divisor:
-        # account for case where there may be more than one pair of points
-        for point_idx in range(int(divisor - previous_divisor)):
-            point = (points_left[divisor + point_idx], points_right[divisor + point_idx],)
-            intermediate_points.append(point)
-
-    else:
-        raise ValueError("divisor can only be greater or equal than previous_divisor.")
-
-    intermediate_points = np.asarray(intermediate_points)
-    return intermediate_points
-
-
-def get_beta_in_distance_vector(pos: float, points: np.ndarray):
-    """
-    Compute the progression factor beta in the "distance space".
-    :param pos: query point for which to find beta in the distance vector
-    :param points: Distance vector
-    """
-    delta = 1.0 / float(len(points))
-    # handle special cases at beginning or end of distance vector
-    if pos <= points[0]:
-        beta = 0.0
-    elif pos >= points[-1]:
-        beta = 1.0
-    # case when point is inside distance vector
-    else:
-        idx_before = np.argmin(points < pos) - 1
-        idx_after = np.argmax(points > pos)
-        fraction = (pos - points[idx_before]) / (points[idx_after] - points[idx_before])
-        beta = fraction * delta + idx_before * delta
-    return beta
-
-
-def get_point_from_beta_2d(beta: float, points: np.ndarray):
-    """
-    Get point from a vector of points, with beta defined as the progression in the distance vector.
-    :param beta: progression in distance vector
-    :param points: vector of points
-    """
-    delta = 1.0 / float(len(points))
-    remainder = beta % delta
-    remainder = remainder / delta
-    divisor = beta // delta
-    # handle special cases
-    if beta == 1.0:
-        # point = points[int(divisor)-1]
-        point = points[-1]
-        pos = point[0], point[1]
-    elif beta <= delta:
-        pos = interpolate2d(fraction=remainder,
-                            points=[points[0], points[1]])
-    elif beta + delta >= 1.0:
-        pos = interpolate2d(fraction=remainder,
-                            points=[points[-2], points[-1]])
-    # standard case
-    else:
-        pos = interpolate2d(fraction=remainder,
-                            points=[points[int(divisor)], points[int(divisor + 1)]])
-    return pos
-
-
-def make_polygons_from_lanelet(point_list: List[tuple[tuple[float, float]]]):
-    """
-    Make list of polygons from a list of points.
-    For every tuple, first element is left vertex and second element is right vertex
-    """
-    polygons = []
-
-    for idx, points in enumerate(point_list[:-1]):
-        polygon_vertices = points + point_list[idx + 1]
-        polygon_vertices = [vert for vert in polygon_vertices]
-        current_poly = Polygon(polygon_vertices)  # check mutability
-        polygons.append(current_poly)
-
-    return polygons
-
-
-# currently not used
-def get_lanelet_center_coordinates(lanelet_network: LaneletNetwork, lanelet_id: int) -> np.ndarray:
-    center = lanelet_network.find_lanelet_by_id(lanelet_id).polygon.center
-    return center
-
 
 # fixme: temporary workaround to plot with digraph as input. This can be used to avoid deepcopying entire
 # dynamicgraph but only Digraph at each simulation timestep.
@@ -410,7 +297,7 @@ class RoadGraph:
         self.excluded_lanelets = excluded_lanelets
         self._init_road_graph(lanelet_network)
 
-    def _init_road_graph(self, lanelet_network: LaneletNetwork):
+        # def _init_road_graph(self, lanelet_network: LaneletNetwork):
         """
         Construct road graph from road network. All lanelets are added, including the lanelet type.
         Lanelets that are in "excluded_lanelets" will be omitted.
@@ -418,7 +305,7 @@ class RoadGraph:
         If a lane between adjacent lanelets is uncrossable, edge is omitted.
         Length of lane is considered and added as weight.
         """
-        # add all nodes
+        """# add all nodes
         for lanelet in lanelet_network.lanelets:
             # skip excluded lanelet
             if lanelet.lanelet_id in self.excluded_lanelets:
@@ -471,9 +358,9 @@ class RoadGraph:
 
         self.set_default_attributes()
 
-        return
+        return"""
 
-    def set_default_attributes(self) -> None:
+    """def set_default_attributes(self) -> None:
         # set default attributes for nodes
         for node in list(self.road_graph.nodes):
             self.set_node_attribute(attribute='start', value=False, node=node)
@@ -485,23 +372,22 @@ class RoadGraph:
         # set default attributes for edges
         for edge in list(self.road_graph.edges):
             self.set_edge_attribute(attribute='ego_occupied_edge', value=False, edge=edge)
-        return
+        return"""
 
-    def plot_graph(self, file_path: str = None) -> None:
+    """def plot_graph(self, file_path: str = None) -> None:
         fig, ax = plt.subplots(figsize=(60, 60))
         _, _, _ = self.get_collections_networkx(ax=ax)
         if file_path is not None:
             plt.savefig(file_path)
         plt.close()
-        return
+        return"""
 
+    """
     def get_collections_networkx(self, ax: Axes = None) -> Tuple[PathCollection, LineCollection,
                                                                  Mapping[int, plt.Text]]:
-        """
         Get collections for plotting a graph on top of a scenario
-
         :param ax: Axes on which to draw the Artists
-        """
+        
         nodes = self.road_graph.nodes
         edges = self.road_graph.edges
         cents = []
@@ -548,6 +434,7 @@ class RoadGraph:
             labels_plot[label].set_zorder(51)
 
         return nodes_plot, edges_plot, labels_plot
+    """
 
     def get_possible_resources(self, start_node: int, end_node: int) -> Tuple[Set[int], Set[Tuple[int, int]]]:
         """
@@ -600,16 +487,17 @@ class RoadGraph:
 
         return is_upstream
 
+    """
     # tbd: reward function
     def reward_1(self, weight: float):
         return -weight
 
     def reward_2(self):
-        return
+        return"""
 
-    def shortest_paths_rewards(self, start_node: int, end_node: int, reward: Callable) \
+    """def shortest_paths_rewards(self, start_node: int, end_node: int, reward: Callable) \
             -> Tuple[List[List[int]], List[float]]:  # tbd: what type returned
-        """
+
         Compute all shortest simple paths between two nodes using dijkstra algorithm.
         Weight is considered. If several paths have same (shortest) length, return them all.
         Returns path and reward.
@@ -619,43 +507,41 @@ class RoadGraph:
         :param reward: function to use to calculate reward of a specific path
         """
 
-        paths = nx.all_shortest_paths(G=self.road_graph, source=start_node, target=end_node,
+    """    paths = nx.all_shortest_paths(G=self.road_graph, source=start_node, target=end_node,
                                       weight='weight', method='dijkstra')  # question: check if weight is considered
         rewards = []
         paths_list = list(paths)
         for path in paths_list:
             rewards.append(self.get_cost_from_path(path=path, reward=reward))
-        return paths_list, rewards
+        return paths_list, rewards"""
 
-    def get_cost_from_path(self, path: List[int], reward: Callable):
+    """def get_cost_from_path(self, path: List[int], reward: Callable):
         path_edges = nx.utils.pairwise(path)
         path_reward = 0
         for edge in path_edges:
             path_reward += reward(self.road_graph.get_edge_data(edge[0], edge[1])['weight'])
-        return path_reward
+        return path_reward"""
 
-    def get_lanelet_by_position(self, position: np.ndarray) -> int:
-        """
+    """def get_lanelet_by_position(self, position: np.ndarray) -> int:
         Compute lanelet that contains the queried position.
         :param position: query position
-        """
         for lanelet_id, lanelet_polygon in list(self.road_graph.nodes(data='polygon')):
             if lanelet_polygon.contains_point(position):
                 return lanelet_id
 
         print("Position: " + str(position) + ". No lanelet found that contains the position you asked for.")
-
-    def set_node_attribute(self, attribute: str, value: Any, node: int) -> None:
+    """
+    """def set_node_attribute(self, attribute: str, value: Any, node: int) -> None:
         try:
             self.road_graph.nodes[node][attribute] = value
         except KeyError:
-            print("Specified node does not exist.")
+            print("Specified node does not exist.")"""
 
-    def set_edge_attribute(self, attribute: str, value: Any, edge: Tuple[int, int]) -> None:
+    """def set_edge_attribute(self, attribute: str, value: Any, edge: Tuple[int, int]) -> None:
         try:
             self.road_graph.edges[(edge[0], edge[1])][attribute] = value
         except KeyError:
-            print("Specified edge does not exist.")
+            print("Specified edge does not exist.")"""
 
     '''# for now keep for reference
     # naive implementation: depth_limit is just a user-defined integer. May not be the right choice.
@@ -1028,7 +914,7 @@ def split_lanelet_into_polygons(lanelet: Lanelet, max_length: float) -> List[Pol
     counter = 0
     for idx, center_length in enumerate(centerline_distance):
         ddistance = centerline_distance[idx] - centerline_distance[idx - 1]
-        current_polygon_id = lanelet.lanelet_id*resource_id_factor + counter
+        current_polygon_id = lanelet.lanelet_id * resource_id_factor + counter
         if idx == 0:
             continue
         elif ddistance <= max_length:
@@ -1052,7 +938,7 @@ def split_lanelet_into_polygons(lanelet: Lanelet, max_length: float) -> List[Pol
                 current_polygon = Polygon(LinearRing(vertices))
                 polygons.append((current_polygon, current_polygon_id))
 
-        counter = counter+1
+        counter = counter + 1
 
     return polygons
 
@@ -1100,39 +986,27 @@ def split_lanelet_into_polygons(lanelet: Lanelet, max_length: float) -> List[Pol
     return polygons"""
 
 
-class ResourceNetwork:
-
+class ResourceNetwork():
     uncrossable_line_markings = ["solid", "broad_solid"]  # no vehicle can cross this
 
-    def __init__(self, lanelet_network: LaneletNetwork, max_length: float):
+    def __init__(self, lanelet_network: LaneletNetwork, max_length: Optional[float] = None,
+                 excluded_lanelets: Optional[List[int]] = None):
         """
-
-        :param lanelet_network:
-        :param max_length: maximum length of a cell
+        Create a digraph, here called Resource Network, from a Commonroad lanelet network.
+        :param lanelet_network: Commonroad lenelet network
+        :param max_length: maximum length of a cell. If None, each lanelet is a cell.
+        :param excluded_lanelets: lanelets that should not be added to the graph
         """
         # get lanelet network and create digraph
         # store in STRTree as well (or only in STRTree)
-        self.excluded_lanelets = []
         self.resource_graph: DiGraph = DiGraph()
         self.tree: STRtree
-        self._create_rtree(lanelet_network=lanelet_network, max_cell_length=max_length)
-        self._init_resource_graph(lanelet_network=lanelet_network, max_cell_length=max_length)
-
-    def _create_rtree(self, lanelet_network: LaneletNetwork, max_cell_length: float):
-        resources = []
-
-        for lanelet in lanelet_network.lanelets:
-            # skip excluded lanelets
-            if lanelet.lanelet_id in self.excluded_lanelets:
-                continue
-            new_resources = split_lanelet_into_polygons(
-                lanelet=lanelet_network.find_lanelet_by_id(lanelet.lanelet_id), max_length=max_cell_length)
-            resources.extend(new_resources)
-
-        resource_polygons = [resource[0] for resource in resources]
-        resource_ids = [resource[1] for resource in resources]
-        self.tree = STRtree(geoms=resource_polygons, items=resource_ids)
-        return
+        if excluded_lanelets is None:
+            excluded_lanelets = list()
+        self.excluded_lanelets = excluded_lanelets
+        self._create_rtree(lanelet_network=lanelet_network, max_length=max_length)
+        # fixme: merge the graph creation functions
+        self._init_graph(lanelet_network=lanelet_network, max_length=max_length)
 
     def set_default_attributes(self) -> None:
         # set default attributes for nodes
@@ -1160,11 +1034,191 @@ class ResourceNetwork:
         except KeyError:
             print("Specified edge does not exist.")
 
-    def _init_resource_graph(self, lanelet_network: LaneletNetwork, max_cell_length: float):
+    def plot_graph(self, file_path: str = None) -> None:
+        fig, ax = plt.subplots(figsize=(60, 60))
+        _, _, _ = self.get_collections_networkx(ax=ax)
+        if file_path is not None:
+            plt.savefig(file_path)
+        plt.close()
+        return
+
+    def get_collections_networkx(self, ax: Axes = None) -> Tuple[PathCollection, LineCollection,
+                                                                 Mapping[int, plt.Text]]:
+        """
+        Get collections for plotting a graph on top of a scenario
+        :param ax: Axes on which to draw the Artists
+        """
+        nodes = self.resource_graph.nodes
+        edges = self.resource_graph.edges
+        cents = []
+        for node in nodes.data():
+            cents.append(node[-1]['polygon'].center)
+
+        centers = dict(zip(nodes.keys(), cents))
+
+        # set default edge and node colors
+        edge_colors = ['k'] * len(self.resource_graph.edges)
+        node_colors = ['#1f78b4'] * len(self.resource_graph.nodes)
+
+        # set special node and edge colors depending on node and edge attributes
+        for node in nodes.data():
+            node_idx = list(nodes).index(node[0])
+            if node[1]['goal_of_interest']:
+                node_colors[node_idx] = 'magenta'
+            if node[1]['ego_occupied_resource']:
+                node_colors[node_idx] = 'r'
+            if node[1]['occupied_by_agent']:
+                node_colors[node_idx] = 'cyan'
+            if node[1]['goal']:
+                node_colors[node_idx] = 'limegreen'
+            if node[1]['start']:
+                node_colors[node_idx] = 'gold'
+
+        # color edges possibly occupied by ego
+        for edge in edges.data():
+            edge_idx = list(edges).index((edge[0], edge[1]))
+            if edge[2]['ego_occupied_edge']:
+                edge_colors[edge_idx] = 'r'
+
+        # return collections and set zorders
+        # the functions draw_* already plots on axes
+        nodes_plot = draw_networkx_nodes(G=self.resource_graph, ax=ax, pos=centers, node_size=200,
+                                         node_color=node_colors)
+        nodes_plot.set_zorder(50)
+
+        edges_plot = draw_networkx_edges(G=self.resource_graph, ax=ax, pos=centers, edge_color=edge_colors)
+        for edge in range(len(edges_plot)):
+            edges_plot[edge].set_zorder(49)
+
+        labels_plot = draw_networkx_labels(G=self.resource_graph, ax=ax, pos=centers)
+        for label in labels_plot.keys():
+            labels_plot[label].set_zorder(51)
+
+        return nodes_plot, edges_plot, labels_plot
+
+    def get_possible_resources(self, start_node: int, end_node: int) -> Tuple[Set[int], Set[Tuple[int, int]]]:
+        """
+        Compute all nodes where an agent could be when transiting from start_node to end_node
+        Return both occupied nodes and occupied edges
+
+        :param start_node: departure of agent
+        :param end_node: destination of agent
+        """
+        paths = all_simple_paths(self.resource_graph, source=start_node, target=end_node)
+
+        occupancy_nodes = set()
+        occupancy_edges = set()
+        for path in paths:
+            # add new nodes only if they are not yet in occupancy_nodes
+            occupancy_nodes |= set(path)
+            # add new edges only if they are not yet in occupancy_edges
+            path_edges = nx.utils.pairwise(path)  # transforms [a,b,c,...] in [(a,b),(b,c),...]
+            occupancy_edges |= set(path_edges)
+        return occupancy_nodes, occupancy_edges
+
+    def get_occupancy_children(self, occupied_resources: Set[int]) -> List[int]:
+        """
+        Compute the children of the nodes in the "occupancy zone" as computed by "get_possible_resources"
+
+        :param occupied_resources: part of digraph where the ego could be on his journey to the goal
+        """
+        children = []
+        for node in occupied_resources:
+            candidates = list(self.resource_graph.successors(node))
+            for cand in candidates:
+                if cand in occupied_resources:
+                    continue
+                else:
+                    children.append(cand)
+
+        return children
+
+    def is_upstream(self, node_id: int, nodes: Set[int]) -> bool:
+        """
+        Determine wether a given node is upstream a set of nodes.
+        Returns True even if node_id is in nodes
+
+        :param node_id: node id of node we want to know if is upstream
+        :param nodes: set of nodes to check against
+        """
+
+        children = nx.traversal.bfs_tree(G=self.resource_graph, source=node_id).nodes
+        is_upstream = (set(children) & nodes) != set()
+
+        return is_upstream
+
+    # tbd: reward function
+    def reward_1(self, weight: float):
+        return -weight
+
+    def reward_2(self):
+        return
+
+    def shortest_paths_rewards(self, start_node: int, end_node: int, reward: Callable) \
+            -> Tuple[List[List[int]], List[float]]:  # tbd: what type returned
+        """
+        Compute all shortest simple paths between two nodes using dijkstra algorithm.
+        Weight is considered. If several paths have same (shortest) length, return them all.
+        Returns path and reward.
+
+        :param start_node: starting node of path
+        :param end_node: ending node of path
+        :param reward: function to use to calculate reward of a specific path
+        """
+
+        paths = nx.all_shortest_paths(G=self.resource_graph, source=start_node, target=end_node,
+                                      weight='weight', method='dijkstra')  # question: check if weight is considered
+        rewards = []
+        paths_list = list(paths)
+        for path in paths_list:
+            rewards.append(self.get_cost_from_path(path=path, reward=reward))
+        return paths_list, rewards
+
+    def get_cost_from_path(self, path: List[int], reward: Callable):
+        path_edges = nx.utils.pairwise(path)
+        path_reward = 0
+        for edge in path_edges:
+            path_reward += reward(self.resource_graph.get_edge_data(edge[0], edge[1])['weight'])
+        return path_reward
+
+    # fixme: remove when StrTree method tested
+    def get_lanelet_by_position_old(self, position: np.ndarray) -> int:
+        """
+        Compute lanelet that contains the queried position.
+        :param position: query position
+        """
+        for lanelet_id, lanelet_polygon in list(self.resource_graph.nodes(data='polygon')):
+            if lanelet_polygon.contains_point(position):
+                return lanelet_id
+
+        print("Position: " + str(position) + ". No lanelet found that contains the position you asked for.")
+
+    # new function
+    def get_lanelet_by_position(self, position: Union[np.ndarray, Point]) -> int:
+        """
+        Compute lanelet that contains the queried position by exploiting StrTree.
+        :param position: query position. CoM of agent.
+        """
+        if isinstance(position, np.ndarray):
+            position = Point(position)
+
+        candidates = [o.wkt for o in self.tree.query(position)]
+        assert len(candidates) != 1, "There should only be one resource intersecting the agent CoM."
+        return candidates[0]
+
+        print("Position: " + str(position) + ". No lanelet found that contains the position you asked for.")
+
+    def _init_graph(self, lanelet_network: LaneletNetwork, max_length: Optional[float]):
+        if max_length is None:
+            self._init_road_graph(lanelet_network=lanelet_network)
+        else:
+            self._init_resource_graph(lanelet_network=lanelet_network, max_length=max_length)
+
+    def _init_resource_graph(self, lanelet_network: LaneletNetwork, max_length: Optional[float]):
         """
         Construct road graph from road network. All lanelets are added, including the lanelet type.
         Lanelets that are in "excluded_lanelets" will be omitted.
-        Each lanelet is divided into cells smaller than max_cell_length.
+        Each lanelet is divided into cells smaller than max_length.
         Edges are constructed between adjacent polygons.
         If a lane between adjacent lanelets is uncrossable, edges are omitted.
         Weight of a polygon is given by its size.
@@ -1178,7 +1232,7 @@ class ResourceNetwork:
             if lanelet.lanelet_id in self.excluded_lanelets:
                 continue
             resources[lanelet.lanelet_id] = split_lanelet_into_polygons(
-                lanelet=lanelet_network.find_lanelet_by_id(lanelet.lanelet_id), max_length=max_cell_length)
+                lanelet=lanelet_network.find_lanelet_by_id(lanelet.lanelet_id), max_length=max_length)
 
         for lanelet in lanelet_network.lanelets:
             # skip excluded lanelet
@@ -1196,7 +1250,7 @@ class ResourceNetwork:
                 if polygon_idx == resources[lanelet.lanelet_id][-1][1]:
                     continue
                 weight = 1
-                self.resource_graph.add_edge(polygon_idx, polygon_idx+1, weight=weight)
+                self.resource_graph.add_edge(polygon_idx, polygon_idx + 1, weight=weight)
 
             # add edge for all succeeding lanelets
             # specifically, connect last resource of a lanelet with first resource of succeeding lanelet
@@ -1245,6 +1299,87 @@ class ResourceNetwork:
 
         return
 
+    def _init_road_graph(self, lanelet_network: LaneletNetwork):
+        """
+        Construct road graph from road network. All lanelets are added, including the lanelet type.
+        Lanelets that are in "excluded_lanelets" will be omitted.
+        Edges are constructed between a lanelet and its successor, its right adjacent, and left adjacent.
+        If a lane between adjacent lanelets is uncrossable, edge is omitted.
+        Length of lane is considered and added as weight.
+        """
+        # add all nodes
+        for lanelet in lanelet_network.lanelets:
+            # skip excluded lanelet
+            if lanelet.lanelet_id in self.excluded_lanelets:
+                continue
+            # add permissible lanelet to graph
+            polygon = lanelet_network.find_lanelet_by_id(lanelet.lanelet_id).polygon.shapely_object
+            # center = get_lanelet_center_coordinates(lanelet_network, lanelet.lanelet_id)
+
+            self.resource_graph.add_node(lanelet.lanelet_id,
+                                         lanelet_type=lanelet.lanelet_type,
+                                         polygon=polygon)
+
+            # add edge for all succeeding lanelets
+            for id_successor in lanelet.successor:
+                # skip excluded lanelet (may be a successor of an allowed lanelet)
+                if id_successor in self.excluded_lanelets:
+                    continue
+                weight = get_weight_from_lanelets(lanelet_network=lanelet_network,
+                                                  id_lanelet_1=lanelet.lanelet_id,
+                                                  id_lanelet_2=id_successor)
+                self.resource_graph.add_edge(lanelet.lanelet_id, id_successor, weight=weight)
+
+            # add edge for adjacent right lanelet (if existing)
+            if lanelet.adj_right_same_direction and lanelet.adj_right is not None:
+
+                # skip excluded lanelet (may be adj right of an allowed lanelet)
+                if lanelet.adj_right in self.excluded_lanelets \
+                        or lanelet.line_marking_right_vertices.value \
+                        in self.uncrossable_line_markings:
+                    continue
+
+                weight = get_weight_from_lanelets(lanelet_network=lanelet_network,
+                                                  id_lanelet_1=lanelet.lanelet_id,
+                                                  id_lanelet_2=lanelet.adj_right)
+                self.resource_graph.add_edge(lanelet.lanelet_id, lanelet.adj_right, weight=weight)
+
+            # add edge for adjacent left lanelets (if existing)
+            if lanelet.adj_left_same_direction and lanelet.adj_left is not None:
+
+                # skip excluded lanelet (may be adj left of an allowed lanelet)
+                if lanelet.adj_left in self.excluded_lanelets \
+                        or lanelet.line_marking_left_vertices.value \
+                        in self.uncrossable_line_markings:
+                    continue
+
+                weight = get_weight_from_lanelets(lanelet_network=lanelet_network,
+                                                  id_lanelet_1=lanelet.lanelet_id,
+                                                  id_lanelet_2=lanelet.adj_left)
+                self.resource_graph.add_edge(lanelet.lanelet_id, lanelet.adj_left, weight=weight)
+
+        self.set_default_attributes()
+
+        return
+
+    def _create_rtree(self, lanelet_network: LaneletNetwork, max_length: Optional[float]):
+        resources = []
+
+        for lanelet in lanelet_network.lanelets:
+            # skip excluded lanelets
+            if lanelet.lanelet_id in self.excluded_lanelets:
+                continue
+            if max_length is not None:
+                new_resources = split_lanelet_into_polygons(
+                    lanelet=lanelet_network.find_lanelet_by_id(lanelet.lanelet_id), max_length=max_length)
+            else:
+                new_resources = [(lanelet.polygon.shapely_object, lanelet.lanelet_id)]
+            resources.extend(new_resources)
+
+        resource_polygons = [resource[0] for resource in resources]
+        resource_ids = [resource[1] for resource in resources]
+        self.tree = STRtree(geoms=resource_polygons, items=resource_ids)
+        return
 
 
 if __name__ == '__main__':
@@ -1256,40 +1391,41 @@ if __name__ == '__main__':
     scenario, planning_problem_set = CommonRoadFileReader(scenario_path4).open(lanelet_assignment=True)
     net = scenario.lanelet_network
 
-    obj = ResourceNetwork(lanelet_network=net, max_length=10.0)
+    obj = ResourceNetwork(lanelet_network=net, max_length=None)
 
-    #Plot graph and scenario
+    # Plot graph and scenario
 
     fig, axs = plt.subplots(2, figsize=(50, 50))
 
     nodes = obj.resource_graph.nodes
     cents = []
     for node in nodes.data():
+        cent_point = node[-1]['polygon']
         cent_point = node[-1]['polygon'].centroid
         cents.append([cent_point.x, cent_point.y])
 
     cents = dict(zip(nodes.keys(), cents))
 
-    #centers = dict(zip(nodes.keys(), cents))
+    # centers = dict(zip(nodes.keys(), cents))
     nodes_plot = draw_networkx_nodes(G=obj.resource_graph, ax=axs[0], pos=cents, node_size=50)
     edges_plot = draw_networkx_edges(G=obj.resource_graph, ax=axs[0], pos=cents)
-    #plt.savefig("graph_debug.png")
-    #plt.close()
+    # plt.savefig("graph_debug.png")
+    # plt.close()
 
-    #plt.subplots()
-    rnd = MPRenderer(ax=axs[1],)
+    # plt.subplots()
+    rnd = MPRenderer(ax=axs[1], )
     scenario.draw(rnd)
-    #planning_problem_set.draw(rnd)
+    # planning_problem_set.draw(rnd)
     rnd.render()
     plt.savefig("scenario.png")
     plt.close()
 
-    #test_lanelet = 3318
-    #test_lanelet_adj_right = 3316
-    #test_lanelet_adj_left = 3320
-    #new_polygons = split_lanelet_into_polygons(net.find_lanelet_by_id(test_lanelet), max_length=10.0)
-    #new_polygons_right = split_lanelet_into_polygons(net.find_lanelet_by_id(test_lanelet_adj_right), max_length=10.0)
-    #new_polygons_left = split_lanelet_into_polygons(net.find_lanelet_by_id(test_lanelet_adj_left), max_length=10.0)
+    # test_lanelet = 3318
+    # test_lanelet_adj_right = 3316
+    # test_lanelet_adj_left = 3320
+    # new_polygons = split_lanelet_into_polygons(net.find_lanelet_by_id(test_lanelet), max_length=10.0)
+    # new_polygons_right = split_lanelet_into_polygons(net.find_lanelet_by_id(test_lanelet_adj_right), max_length=10.0)
+    # new_polygons_left = split_lanelet_into_polygons(net.find_lanelet_by_id(test_lanelet_adj_left), max_length=10.0)
 
     inters_c_r = []
     inters_c_l = []
