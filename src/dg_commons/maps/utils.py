@@ -2,6 +2,8 @@ import numpy as np
 from typing import List
 from commonroad.scenario.lanelet import LaneletNetwork, Lanelet
 
+__all__ = ['interpolate2d']
+
 def interpolate2d(fraction: float, points: [[float, float], [float, float]]) -> [float, float]:
     """
     Simple interpolation between two points in 2D.
