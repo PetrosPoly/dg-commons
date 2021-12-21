@@ -2,10 +2,14 @@ from dg_commons_dev.behavior.behavior_types import Situation
 from dataclasses import dataclass
 from typing import Optional, Union, List, Tuple, MutableMapping
 from dg_commons.sim.models import kmh2ms, extract_vel_from_state
-from dg_commons_dev.behavior.utils import SituationObservations, \
-    occupancy_prediction, SituationPolygons, Polygon, PlayerObservations
+from dg_commons_dev.behavior.utils import SituationObservations, occupancy_prediction, SituationPolygons,\
+    PlayerObservations, intentions_prediction
+from shapely.geometry import LineString, Polygon
 from dg_commons import PlayerName, X
 from dg_commons_dev.utils import BaseParams
+from shapely.geometry.base import BaseGeometry
+from dg_commons.maps.lanes import DgLanelet
+import numpy as np
 
 
 @dataclass
@@ -39,6 +43,9 @@ class CruiseParams(BaseParams):
 
     min_safety_distance: float = 5.0
     """ Min distance to keep from vehicle ahead at v = 0 """
+
+    look_ahead_distance_enhancement: float = 3.0
+    """ Look ahead distance = look_ahead_distance_enhancement * safety distance"""
 
     kp_back: float = 2.0
     kp_forward: float = 1.0
@@ -79,11 +86,20 @@ class Cruise(Situation[SituationObservations, CruiseDescription]):
         my_state: X = agents[my_name].state
         my_vel: float = my_state.vx
         my_occupancy: Polygon = agents[my_name].occupancy
-        my_polygon, _ = occupancy_prediction(agents[my_name].state, self._get_look_ahead_time(my_vel))
+
+        path: DgLanelet = self.obs.planned_path
+        beta, q = path.find_along_lane_closest_point(np.array([new_obs.agents[my_name].state.x,
+                                                               new_obs.agents[my_name].state.y]), 10e-3)
+        along_lane: float = path.along_lane_from_beta(beta)
+        my_polygon, _ = intentions_prediction(self._get_look_ahead_distance(my_vel), path, along_lane)
+
+        # my_polygon, _ = occupancy_prediction(agents[my_name].state, self._get_look_ahead_time(my_vel))
         self.polygon_plotter.plot_polygon(my_polygon, SituationPolygons.PolygonClass(dangerous_zone=True))
 
         self.cruise_situation = CruiseDescription(is_cruise=True, is_following=False,
                                                   speed_ref=self.params.nominal_speed, my_player=my_name)
+
+        # TODO: merge together, lot of duplicated code
         for other_name, _ in agents.items():
             if other_name == my_name:
                 continue
@@ -107,9 +123,37 @@ class Cruise(Situation[SituationObservations, CruiseDescription]):
                 self.cruise_situation = CruiseDescription(True, is_following=True, speed_ref=speed_ref,
                                                           my_player=my_name, other_player=other_name)
 
-                other_occupancy, _ = occupancy_prediction(agents[other_name].state, 0.1)
-                my_occupancy, _ = occupancy_prediction(agents[my_name].state, 0.1)
-                self.polygon_plotter.plot_polygon(my_occupancy, SituationPolygons.PolygonClass(following=True))
+                other_plot, _ = occupancy_prediction(agents[other_name].state, 0.1)
+                my_plot, _ = occupancy_prediction(agents[my_name].state, 0.1)
+                self.polygon_plotter.plot_polygon(my_plot, SituationPolygons.PolygonClass(following=True))
+                self.polygon_plotter.plot_polygon(other_plot, SituationPolygons.PolygonClass(following=True))
+                # This is only for plotting purposes
+
+        for obs in new_obs.static_obstacles:
+
+            other_vel: float = 0
+            other_occupancy: BaseGeometry = obs.shape
+            if isinstance(other_occupancy, LineString):
+                continue
+            intersection: BaseGeometry = my_polygon.intersection(other_occupancy)
+            other_name: PlayerName = PlayerName("StaticObs")
+
+            if not intersection.is_empty:
+                distance: float = my_occupancy.distance(other_occupancy)
+                min_distance: float = self._get_min_safety_dist(my_vel)
+                if distance < min_distance:
+                    speed_ref: float = \
+                        other_vel + (distance - min_distance) / min_distance * other_vel * self.params.kp_back
+                elif distance > min_distance and other_vel < self.params.nominal_speed:
+                    speed_ref: float = \
+                        other_vel + (distance - min_distance) / min_distance * other_vel * self.params.kp_forward
+                else:
+                    speed_ref: float = self.params.nominal_speed
+                self.cruise_situation = CruiseDescription(True, is_following=True, speed_ref=speed_ref,
+                                                          my_player=my_name, other_player=other_name)
+
+                my_plot, _ = occupancy_prediction(agents[my_name].state, 0.1)
+                self.polygon_plotter.plot_polygon(my_plot, SituationPolygons.PolygonClass(following=True))
                 self.polygon_plotter.plot_polygon(other_occupancy, SituationPolygons.PolygonClass(following=True))
                 # This is only for plotting purposes
 
@@ -130,9 +174,17 @@ class Cruise(Situation[SituationObservations, CruiseDescription]):
         @return: Time
         """
         if vel == 0:
-            return self.safety_time_braking * 2
+            return self._get_look_ahead_distance(vel)  # As if vel = 1 m/s
         else:
-            return (self._get_min_safety_dist(vel) + 5) / vel
+            return self._get_look_ahead_distance(vel) / vel
+
+    def _get_look_ahead_distance(self, vel: float) -> float:
+        """
+        Hor far should I look
+        @param vel: Vehicle velocity
+        @return: Look ahead distance
+        """
+        return self._get_min_safety_dist(vel) * self.params.look_ahead_distance_enhancement
 
     def is_true(self) -> bool:
         """

@@ -4,14 +4,14 @@ from dg_commons_dev.planning.rrt_utils.dubins_path_planning import dubins_path_p
 from dg_commons_dev.planning.rrt_utils.utils import Node
 
 
-def dubin_distance_cost(node1: Node, node2: Node, *args) -> float:
+def dubin_distance_cost(node1: Node, node2: Node, curvature: float) -> float:
     """
     Compute dubin distance between two nodes
-    @param node1: starting node
-    @param node2: node to be reached
+    @param node1: node to be reached
+    @param node2: starting node
+    @param curvature: max curvature
     @return: Dubin distance
     """
-    curvature = args[0]
     p_x, _, _, _, _, cost = dubins_path_planning(node2.x, node2.y, node2.yaw,
                                                  node1.x, node1.y, node1.yaw, curvature, 0.1)
 
@@ -21,11 +21,12 @@ def dubin_distance_cost(node1: Node, node2: Node, *args) -> float:
     return cost
 
 
-def distance_cost(node1: Node, node2: Node, *args) -> float:
+def distance_cost(node1: Node, node2: Node, curvature: float = 0) -> float:
     """
     Compute distance between two nodes
-    @param node1: First node
-    @param node2: Second node
+    @param node1: node to be reached
+    @param node2: starting node
+    @param curvature: max curvature
     @return: Squared distance
     """
 
@@ -36,11 +37,12 @@ def distance_cost(node1: Node, node2: Node, *args) -> float:
     return dist
 
 
-def distance_angle_cost(node1: Node, node2: Node, *args) -> float:
+def distance_angle_cost(node1: Node, node2: Node, curvature: float = 0) -> float:
     """
     Compute sum of angle and absolute distance between two nodes
-    @param node1: starting node
-    @param node2: node to be reached
+    @param node1: node to be reached
+    @param node2: starting node
+    @param curvature: max curvature
     @return: Squared distance
     """
 
@@ -66,16 +68,17 @@ def distance_angle_cost(node1: Node, node2: Node, *args) -> float:
     return dist + factor * delta3
 
 
-def naive(node: Node, node_list: List[Node], cost_fct: Callable[[Node, Node, ...], float], *args) -> int:
+def naive(node: Node, node_list: List[Node], cost_fct: Callable[[Node, Node, ...], float], curvature: float = 0) -> int:
     """
     Naive nearest neighbor search with cost_fct as discriminant choice
     @param node: Node of interest
     @param node_list: List of existing nodes
     @param cost_fct: Cost function for discrimination
+    @param curvature: max curvature
     @return: Index of node closest to node in node_list
     """
 
-    cost_list = [cost_fct(node, other_node, *args) for other_node in node_list]
+    cost_list = [cost_fct(node, other_node, curvature) for other_node in node_list]
     min_ind = cost_list.index(min(cost_list))
 
     return min_ind

@@ -14,7 +14,7 @@ from shapely.geometry.base import BaseGeometry
 class RRTStarParams(RRTParams):
     path_resolution: float = 0.5
     """ Resolution of points on path """
-    max_iter: int = 500
+    max_iter: int = 1500
     """ Maximal number of iterations """
     goal_sample_rate: float = 5
     """ Rate at which, on average, the goal position is sampled in % """
@@ -27,65 +27,67 @@ class RRTStarParams(RRTParams):
     Steering function: takes two nodes (start and goal); Maximum distance; Resolution of path; Max curvature
     and returns the new node fulfilling the passed requirements
     """
-    distance_meas: Callable[[Node, Node], float] = distance_cost
+    distance_meas: Callable[[Node, Node, float], float] = distance_cost
     """ 
     Formulation of a distance between two nodes, in general not symmetric: from first node to second
     """
-    max_distance: float = 1
+    max_distance: float = 3
     """ 
     Maximum distance between a node and its nearest neighbor wrt distance_meas
     """
-    max_distance_to_goal: float = 1
+    max_distance_to_goal: float = 3
     """ Max distance to goal """
-    nearest_neighbor_search: Callable[[Node, List[Node], Callable[[Node, Node], float]], int] = naive
+    nearest_neighbor_search: Callable[[Node, List[Node], Callable[[Node, Node, float], float], float], int] = naive
     """ 
     Method for nearest neighbor search. Searches for the nearest neighbor to a node through a list of nodes wrt distance
     function.
     """
-    connect_circle_dist: float = 50.0
-    """ Radius of near neighbors is proportional to this one """
     enlargement_factor: Tuple[float, float] = (1.5, 1.5)
     """ Proportional length and width min distance to keep from obstacles"""
+    connect_circle_dist: float = 5.0
+    """ Radius of near neighbors is proportional to this one, only used in RRT star """
+    max_curvature: float = 0.2
+    """ Maximal curvature in Dubin curve, only used with Dubin curves """
 
 
 class RRTStar(RRT):
     """
     Class for RRT Star planning
     """
+    REF_PARAMS: dataclass = RRTStarParams
 
-    def __init__(self,
-                 start: Node,
-                 goal: Node,
-                 obstacle_list: List[BaseGeometry],
-                 sampling_bounds: BaseBoundaries,
-                 params: RRTStarParams = RRTStarParams()):
+    def __init__(self, params: RRTStarParams = RRTStarParams()):
         """
         Parameters set up
+        @param params: RRT star parameters
+        """
+        super().__init__(params)
+
+    def planning(self, start: Node, goal: Node, obstacle_list: List[BaseGeometry], sampling_bounds: BaseBoundaries,
+                 search_until_max_iter: bool = False) -> Optional[List[Node]]:
+        """
+        RRT Star planning
         @param start: Starting node
         @param goal: Goal node
         @param obstacle_list: List of shapely objects representing obstacles
         @param sampling_bounds: Boundaries in the samples space
-        @param params: RRT star parameters
-        """
-        super().__init__(start, goal, obstacle_list, sampling_bounds, params)
-        self.connect_circle_dist = params.connect_circle_dist
-
-    def planning(self, search_until_max_iter: bool = False) -> Optional[List[Node]]:
-        """
-        RRT path planning
         @param search_until_max_iter: flag for whether to search until max_iter
         @return: sequence of nodes corresponding to path found or None if no path was found
         """
-
+        self.start = start
+        self.end = goal
+        self.boundaries = sampling_bounds
+        self.obstacle_list = obstacle_list
         self.node_list = [self.start]
+
         for i in range(self.max_iter):
             print("Iter:", i, ", number of nodes:", len(self.node_list))
             rnd_node = self.sampling_fct(self.boundaries, self.end, self.goal_sample_rate)
-            nearest_ind = self.nearest(rnd_node, self.node_list, self.distance_meas)
+            nearest_ind = self.nearest(rnd_node, self.node_list, self.distance_meas, self.curvature)
             nearest_node = self.node_list[nearest_ind]
-            new_node = self.steering_fct(nearest_node, rnd_node, self.expand_dis)
-            near_node = self.node_list[nearest_ind]
-            new_node.cost = near_node.cost + self.distance_meas(near_node, new_node)
+
+            new_node = self.steering_fct(nearest_node, rnd_node, self.expand_dis, self.path_resolution, self.curvature)
+            new_node.cost = self.calc_new_cost(nearest_node, new_node)
 
             if self.check_collision(new_node, self.obstacle_list):
                 near_inds = self.find_near_nodes(new_node)
@@ -95,17 +97,17 @@ class RRTStar(RRT):
                     self.node_list.append(node_with_updated_parent)
                 else:
                     self.node_list.append(new_node)
+                self.update_nodes_to_end()
 
-            if (not search_until_max_iter) and new_node:
-                last_index = self.search_best_goal_node()
-                if last_index is not None:
-                    return self.generate_final_course(last_index)
+                if (not search_until_max_iter) and self.can_reach_end:
+                    self.search_best_goal_node()
+                    return self.generate_final_course()
 
         print("reached max iteration")
 
-        last_index = self.search_best_goal_node()
-        if last_index is not None:
-            return self.generate_final_course(last_index)
+        if self.can_reach_end:
+            self.search_best_goal_node()
+            return self.generate_final_course()
 
         return None
 
@@ -123,7 +125,7 @@ class RRTStar(RRT):
         costs = []
         for i in near_inds:
             near_node = self.node_list[i]
-            t_node = self.steering_fct(near_node, new_node, self.expand_dis, self.path_resolution)
+            t_node = self.steering_fct(near_node, new_node, self.expand_dis, self.path_resolution, self.curvature)
             if t_node and self.check_collision(t_node, self.obstacle_list):
                 costs.append(self.calc_new_cost(near_node, new_node))
             else:
@@ -135,40 +137,11 @@ class RRTStar(RRT):
             return None
 
         min_ind = near_inds[costs.index(min_cost)]
-        new_node = self.steering_fct(self.node_list[min_ind], new_node, self.expand_dis, self.path_resolution)
+        new_node = self.steering_fct(self.node_list[min_ind], new_node, self.expand_dis,
+                                     self.path_resolution, self.curvature)
         new_node.cost = min_cost
 
         return new_node
-
-    def search_best_goal_node(self) -> Optional[int]:
-        """
-        Search and return node, whose path to the goal is shortest between the nodes at least as close as
-        self.expand_dis.
-        @return: The node index or None if not found
-        """
-        dist_to_goal_list = [
-            self.distance_meas(node, self.end) for node in self.node_list
-        ]
-        goal_inds = [
-            dist_to_goal_list.index(i) for i in dist_to_goal_list
-            if i <= self.expand_dis
-        ]
-
-        safe_goal_inds = []
-        for goal_ind in goal_inds:
-            t_node = self.steering_fct(self.node_list[goal_ind], self.end, self.expand_dis, self.path_resolution)
-            if self.check_collision(t_node, self.obstacle_list):
-                safe_goal_inds.append(goal_ind)
-
-        if not safe_goal_inds:
-            return None
-
-        min_cost = min([self.node_list[i].cost for i in safe_goal_inds])
-        for i in safe_goal_inds:
-            if self.node_list[i].cost == min_cost:
-                return i
-
-        return None
 
     def find_near_nodes(self, new_node: Node) -> List[int]:
         """
@@ -177,11 +150,11 @@ class RRTStar(RRT):
         @param new_node: New randomly generated node, without collisions between its nearest node
         @return: List with the indices of the nodes inside the ball of radius r
         """
-        nnode = len(self.node_list) + 1
-        r = self.connect_circle_dist * math.sqrt((math.log(nnode) / nnode))
+        n_node = len(self.node_list) + 1
+        r = self.connect_circle_dist * math.sqrt((math.log(n_node) / n_node))
         r = min(r, self.expand_dis)
 
-        dist_list = [self.distance_meas(node, new_node) for node in self.node_list]
+        dist_list = [self.distance_meas(node, new_node, self.curvature) for node in self.node_list]
         near_inds = [dist_list.index(i) for i in dist_list if i <= r**2]
         return near_inds
 
@@ -196,7 +169,7 @@ class RRTStar(RRT):
         """
         for i in near_inds:
             near_node = self.node_list[i]
-            edge_node = self.steering_fct(new_node, near_node, self.expand_dis, self.path_resolution)
+            edge_node = self.steering_fct(new_node, near_node, self.expand_dis, self.path_resolution, self.curvature)
             if not edge_node:
                 continue
             edge_node.cost = self.calc_new_cost(new_node, near_node)
@@ -220,7 +193,7 @@ class RRTStar(RRT):
         @param to_node: target node
         @return: distance
         """
-        d = self.distance_meas(from_node, to_node)
+        d = self.distance_meas(to_node, from_node, self.curvature)
         return from_node.cost + d
 
     def propagate_cost_to_leaves(self, parent_node: Node) -> None:
@@ -234,21 +207,14 @@ class RRTStar(RRT):
                 self.propagate_cost_to_leaves(node)
 
 
-def main():
-    print("Start " + __file__)
+def main(gx=6.0, gy=10.0):
+    """ Dummy example """
 
-    # ====Search Path with RRT====
-    obstacleList = [Polygon(((5, 4), (5, 6), (10, 6), (10, 4), (5, 4))), LineString([Point(0, 8), Point(5, 8)])]
+    obstacle_list = [Polygon(((5, 4), (5, 6), (10, 6), (10, 4), (5, 4))), LineString([Point(0, 8), Point(5, 8)])]
     bounds: BaseBoundaries = RectangularBoundaries((-2, 15, -2, 15))
-
-    # Set Initial parameters
-    rrt_star = RRTStar(
-        start=Node(0, 0),
-        goal=Node(6, 10),
-        sampling_bounds=bounds,
-        obstacle_list=obstacleList)
-    path = rrt_star.planning()
-    rrt_star.plot_results(create_animation=True)
+    rrt = RRTStar()
+    rrt.planning(start=Node(0, 0), goal=Node(gx, gy), sampling_bounds=bounds, obstacle_list=obstacle_list)
+    rrt.plot_results(create_animation=True)
 
 
 if __name__ == '__main__':

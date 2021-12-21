@@ -5,8 +5,7 @@ import copy
 
 
 def straight_to(from_node: Node, to_node: Node, extend_length: float = float("inf"), resolution: float = 0.1,
-                curvature: float = 0)\
-        -> Node:
+                curvature: float = 0) -> Node:
     """
     Cut distance to a maximum of extend_length
     @param from_node: start node
@@ -17,16 +16,15 @@ def straight_to(from_node: Node, to_node: Node, extend_length: float = float("in
     @return: node along the way from from node to to_node but at most extend_length distant and with a path description
              with the passed resolution
     """
-    assert curvature == 0
 
     new_node = Node(from_node.x, from_node.y)
-    d, theta = calc_distance_and_angle(new_node, to_node)
+    dist, theta = calc_distance_and_angle(new_node, to_node)
 
     new_node.path_x = [new_node.x]
     new_node.path_y = [new_node.y]
 
-    if extend_length > d:
-        extend_length = d
+    if extend_length > dist:
+        extend_length = dist
 
     n_expand = math.floor(extend_length / resolution)
 
@@ -83,7 +81,6 @@ def dubin_curves(from_node: Node, to_node: Node, extend_length: float = float("i
     new_node.path_x = p_x
     new_node.path_y = p_y
     new_node.path_yaw = p_yaw
-    new_node.cost += sum([abs(c) for c in course_lengths])
     new_node.parent = from_node
 
     return new_node

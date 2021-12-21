@@ -1,10 +1,6 @@
 from typing import List, Optional, Tuple, Union
 import math
-import matplotlib.pyplot as plt
-import numpy as np
 from shapely.geometry import Point, LineString, Polygon
-from shapely.geometry.base import BaseGeometry
-from dg_commons.maps.lanes import DgLanelet
 from shapely.affinity import rotate, translate, scale
 from dg_commons.sim.models.vehicle import VehicleGeometry
 
@@ -21,56 +17,48 @@ class Node:
 
         self.path_x: List[float] = []
         self.path_y: List[float] = []
-        self._path_yaw: List[float] = []
+        self.path_yaw: List[float] = []
         self.parent: Optional["Node"] = None
-        self.cost: float = 0.0
+        self.cost: float = 0
 
-        self.is_yaw_considered: bool = self._yaw is not None
+        self.is_yaw_considered: bool = self.yaw is not None
 
     @property
     def yaw(self) -> float:
-        """
-        Yaw Getter
-        @return: Yaw corresponding to the considered node
-        """
-        assert self._yaw is not None
         return self._yaw
 
     @yaw.setter
-    def yaw(self, yaw: float) -> None:
+    def yaw(self, val: float):
         """
         Yaw setter
-        @param yaw: Yaw value to set
+        @param val: yaw value
         """
-        self._yaw = yaw
+        self._yaw = val
         self.is_yaw_considered = True
-
-    @property
-    def path_yaw(self) -> List[float]:
-        """
-        Path yaw getter
-        @return:
-        """
-        assert self._yaw is not None
-        return self._path_yaw
-
-    @path_yaw.setter
-    def path_yaw(self, path_yaw: List[float]) -> None:
-        """
-        Path yaw setter
-        @param path_yaw: list of yaw values
-        """
-        assert self._yaw is not None
-        self._path_yaw = path_yaw
 
     def pose(self) -> Union[Tuple[float, float, float], Tuple[float, float]]:
         """
         @return: The goal, that might be a tuple (x, y) or a triplet (x, y, yaw) if yaw is considered
         """
         if self.is_yaw_considered:
-            return self.x, self.y, self._yaw
+            return self.x, self.y, self.yaw
         else:
             return self.x, self.y
+
+    def same(self, other: "Node") -> bool:
+        """
+        Check if two node are equal
+        @param other: Other Node
+        @return:
+        """
+        def close(val1, val2, tol=10e-6):
+            return abs(val1 - val2) < tol
+
+        same_x_y: bool = close(self.x, other.x) and close(self.y, other.y)
+        if self.is_yaw_considered:
+            return (self.yaw, other.yaw) and same_x_y
+        else:
+            return same_x_y
 
 
 def calc_distance_and_angle(from_node: Node, to_node: Node) -> Tuple[float, float]:

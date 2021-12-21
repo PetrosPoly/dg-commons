@@ -17,6 +17,9 @@ from matplotlib import patches
 from matplotlib.collections import PatchCollection
 import matplotlib.pyplot as plt
 from shapely import geometry
+from dg_commons.sim.models.obstacles import StaticObstacle
+from dg_commons.maps.lanes import DgLanelet
+from geometry import translation_angle_from_SE2
 
 
 @dataclass
@@ -29,11 +32,17 @@ class SituationObservations:
     dt_commands: float
     """ Time interval between two subsequent calls """
 
+    planned_path: DgLanelet = None
+    """ Long term path """
+
     agents: MutableMapping[PlayerName, PlayerObservations] = field(default_factory=dict)
     """ PlayerObservations for each player """
 
     rel_poses: Dict[PlayerName, SE2Transform] = field(default_factory=dict)
     """ Relative poses between me and the other players """
+
+    static_obstacles: List[StaticObstacle] = field(default_factory=list)
+    """ Static obstacles """
 
 
 def relative_velocity(my_vel: float, other_vel: float, transform: SE2value) -> float:
@@ -57,6 +66,46 @@ def l_w_from_rectangle(occupacy: Polygon) -> Tuple[float, float]:
     length = np.linalg.norm(np.array([x[0], y[0]]) - np.array([x[3], y[3]]))
     width = np.linalg.norm(np.array([x[0], y[0]]) - np.array([x[1], y[1]]))
     return length, width
+
+
+def intentions_prediction(look_ahead_distance: float, path: DgLanelet, along_lane: float, resolution: float = 0.3):
+    """
+    Generate a polygon covering the lanes involved in the short term plan and a list of polygons describing subdividing
+    these lanes.
+    @param look_ahead_distance: How far in current plan to look ahead
+    @param path: Current plan
+    @param along_lane: Current position on path
+    @param resolution: Interval of subdivision
+    @return: Short term polygon and subdivision list
+    """
+    l_polygon, r_polygon = [], []
+
+    def polygon_data(position: np.ndarray, orientation: float, width: float):
+        normal = np.array([-math.sin(orientation), math.cos(orientation)]) * width / 2
+        l_polygon.append(tuple(position + normal))
+        r_polygon.append(tuple(position - normal))
+
+    n: int = math.ceil(look_ahead_distance / resolution)
+    for i in range(n):
+        along = along_lane + i * resolution
+        beta = path.beta_from_along_lane(along)
+        p = path.center_point(beta)
+        r = path.radius(beta)
+
+        pos, ang = translation_angle_from_SE2(p)
+        polygon_data(pos, ang, r)
+
+    polygons: Dict[float, Polygon] = {}
+    for i in range(n - 1):
+        p1, p2 = l_polygon[i], l_polygon[i + 1]
+        p3, p4 = r_polygon[i + 1], r_polygon[i]
+        polygons[(i + 0.5) * resolution] = Polygon((p1, p2, p3, p4, p1))
+
+    r_polygon.reverse()
+
+    polygon: Polygon() = Polygon(tuple(l_polygon + r_polygon + [l_polygon[0]]))
+
+    return polygon, polygons
 
 
 def states_prediction(current_state: X, time_span: float, dt: float,
@@ -106,6 +155,8 @@ def occupancy_prediction(current_state: X, time_span: float,
     @param vp: Vehicle Parameters
     @return: Integral Area
     """
+    # TODO fix for negative velocities
+
     dt = 0.2
     l_polygon, r_polygon = [], []
 
@@ -129,11 +180,15 @@ def occupancy_prediction(current_state: X, time_span: float,
     for state in states:
         polygon_data(rear_state(state))
 
-    final_state = np.array([state.x + math.cos(state.theta) * lf, \
-                            state.y + math.sin(state.theta) * lf, \
-                            state.theta])
-    polygon_data(final_state)
+    if current_state.vx >= 0:
+        final_state = np.array([state.x + math.cos(state.theta) * lf,
+                                state.y + math.sin(state.theta) * lf,
+                                state.theta])
+
+        polygon_data(final_state)
+
     polygon = Polygon(tuple(l_polygon + r_polygon + [l_polygon[0]]))
+
     return polygon, states
 
 

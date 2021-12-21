@@ -1,5 +1,6 @@
 from abc import ABC, abstractmethod
 from typing import TypeVar, Generic
+from dg_commons.maps.lanes import DgLanelet
 
 
 Obs = TypeVar('Obs')
@@ -34,7 +35,7 @@ class Behavior(ABC, Generic[Obs, S]):
     """ Behavior manages the process of deciding which situation is occurring """
 
     @abstractmethod
-    def update_observations(self, new_obs: Obs):
+    def update_observations(self, new_obs: Obs, path: DgLanelet):
         """ New observations come and a decision on the current situation is made """
         pass
 
