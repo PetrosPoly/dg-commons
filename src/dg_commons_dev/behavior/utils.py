@@ -32,8 +32,8 @@ class SituationObservations:
     dt_commands: float
     """ Time interval between two subsequent calls """
 
-    planned_path: DgLanelet = None
-    """ Long term path """
+    planned_path: Tuple[DgLanelet, float] = (None, None)
+    """ Long term path and current position on it """
 
     agents: MutableMapping[PlayerName, PlayerObservations] = field(default_factory=dict)
     """ PlayerObservations for each player """

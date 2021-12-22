@@ -15,6 +15,8 @@ class Reference:
     """ Reference longitudinal speed """
     path: DgLanelet
     """ Path to follow """
+    along_lane: float
+    """ Current position on lane """
 
 
 class LateralController(Controller[Reference, X, float]):
@@ -22,6 +24,7 @@ class LateralController(Controller[Reference, X, float]):
 
     def __init__(self):
         self.path: Optional[DgLanelet] = None
+        self.along_lane: Optional[float] = None
         self.control_path: Optional[DgLaneletControl] = None
         self.current_beta: Optional[float] = None
 
@@ -42,6 +45,7 @@ class LateralController(Controller[Reference, X, float]):
 
     def update_ref(self, new_ref: Reference):
         self._update_path(new_ref.path)
+        self.along_lane = new_ref.along_lane
 
     def control(self, new_obs: Obs, t: float) -> float:
         self._update_obs(new_obs)
@@ -85,6 +89,7 @@ class LatAndLonController(LateralController, LongitudinalController,
     def update_ref(self, new_ref: Reference):
         self._update_reference_speed(new_ref.speed_ref)
         self._update_path(new_ref.path)
+        self.along_lane = new_ref.along_lane
 
     def control(self, new_obs: Obs, t: float) -> Tuple[float, float]:
         self._update_obs(new_obs)

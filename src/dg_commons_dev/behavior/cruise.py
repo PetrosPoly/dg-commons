@@ -87,10 +87,8 @@ class Cruise(Situation[SituationObservations, CruiseDescription]):
         my_vel: float = my_state.vx
         my_occupancy: Polygon = agents[my_name].occupancy
 
-        path: DgLanelet = self.obs.planned_path
-        beta, q = path.find_along_lane_closest_point(np.array([new_obs.agents[my_name].state.x,
-                                                               new_obs.agents[my_name].state.y]), 10e-3)
-        along_lane: float = path.along_lane_from_beta(beta)
+        path: DgLanelet = self.obs.planned_path[0]
+        along_lane: float = self.obs.planned_path[1]
         my_polygon, _ = intentions_prediction(self._get_look_ahead_distance(my_vel), path, along_lane)
 
         # my_polygon, _ = occupancy_prediction(agents[my_name].state, self._get_look_ahead_time(my_vel))

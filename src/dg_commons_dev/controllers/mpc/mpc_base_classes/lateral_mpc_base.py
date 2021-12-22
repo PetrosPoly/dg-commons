@@ -112,9 +112,8 @@ class LatMPCKinBase(MPCKinBase, LateralController):
         self.current_position = self.rear_axle_position(new_obs) if self.params.rear_axle \
             else self.cog_position(new_obs)
         self.current_speed = new_obs.vx
-        control_sol_params = self.control_path.ControlSolParams(self.current_speed, self.params.t_step)
-        self.current_beta, _ = self.control_path.find_along_lane_closest_point(self.current_position,
-                                                                               control_sol=control_sol_params)
+        self.current_beta = self.control_path.find_along_lane_initial_guess(self.current_position, self.along_lane,
+                                                                            100 * len(self.path.control_points))
         """ Update current state of the vehicle """
         pos1, angle1, pos2, angle2, pos3, angle3 = self.next_pos(self.current_beta)
         self.path_approx.update_from_data(pos1, angle1, pos2, angle2, pos3, angle3)

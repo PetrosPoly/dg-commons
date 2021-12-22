@@ -16,6 +16,7 @@ import copy
 from dg_commons_dev.utils import BaseParams
 from dg_commons.sim.scenarios.structures import StaticObstacle
 from dg_commons.maps.lanes import DgLanelet
+from dg_commons_dev.controllers.controller_types import Reference
 
 
 @dataclass
@@ -105,7 +106,7 @@ class SpeedBehavior(Behavior[MutableMapping[PlayerName, PlayerObservations], Tup
         self.situation: BehaviorSituation = BehaviorSituation()
         """ The speed reference"""
 
-    def update_observations(self, agents: MutableMapping[PlayerName, PlayerObservations], path: DgLanelet,
+    def update_observations(self, agents: MutableMapping[PlayerName, PlayerObservations], ref: Reference,
                             static_obstacles: List[StaticObstacle] = []):
         self.obs.agents = agents
 
@@ -118,7 +119,7 @@ class SpeedBehavior(Behavior[MutableMapping[PlayerName, PlayerObservations], Tup
         agents_rel_pose: Dict[PlayerName, SE2Transform] = valmap(rel_pose, agents)
         self.obs.rel_poses = agents_rel_pose
         self.obs.static_obstacles = static_obstacles
-        self.obs.planned_path = path
+        self.obs.planned_path = (ref.path, ref.along_lane)
 
     def get_situation(self, at: float) -> Tuple[float, BehaviorSituation, Any]:
         self.obs.my_name = self.my_name

@@ -90,9 +90,13 @@ class LQR(LateralController):
 
         p, _, _ = translation_angle_scale_from_E2(self.back_pose)
 
-        control_sol_params = self.control_path.ControlSolParams(new_obs.vx, self.params.t_step)
+        '''control_sol_params = self.control_path.ControlSolParams(new_obs.vx, self.params.t_step)
         self.current_beta, q0 = self.control_path.find_along_lane_closest_point(back_position, tol=1e-4,
-                                                                                control_sol=control_sol_params)
+                                                                                control_sol=control_sol_params)'''
+
+        self.current_beta = self.control_path.find_along_lane_initial_guess(back_position, self.along_lane,
+                                                                            100 * len(self.path.control_points))
+        q0 = self.path.center_point(self.current_beta)
 
         path_approx = True
         if path_approx:

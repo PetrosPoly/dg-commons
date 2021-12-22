@@ -66,12 +66,12 @@ class PurePursuit(LateralController):
         @param new_obs: New Observation
         """
         self.pose = SE2_from_translation_angle([new_obs.x, new_obs.y], new_obs.theta)
+        p, ang = translation_angle_from_SE2(self.pose)
         self.speed = new_obs.vx
 
-        control_sol_params = self.control_path.ControlSolParams(new_obs.vx, self.params.t_step)
-        lanepose = self.control_path.lane_pose_from_SE2_generic(self.pose, control_sol=control_sol_params)
-        self.along_path = lanepose.along_lane
-        self.current_beta = self.path.beta_from_along_lane(self.along_path)
+        self.current_beta = self.control_path.find_along_lane_initial_guess(p, self.along_lane,
+                                                                            100 * len(self.path.control_points))
+        self.along_path = self.path.along_lane_from_beta(self.current_beta)
 
     def find_goal_point(self) -> Tuple[float, SE2value]:
         """

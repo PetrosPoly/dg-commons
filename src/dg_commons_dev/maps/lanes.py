@@ -1,6 +1,6 @@
 import math
 from dataclasses import dataclass
-from typing import Optional, Tuple
+from typing import Optional, Tuple, Callable, List
 import numpy as np
 from geometry import (
     SE2value,
@@ -57,15 +57,11 @@ class DgLaneletControl:
 
         return self.path.lane_pose(along_lane=along_lane, relative_heading=relative_heading, lateral=lateral)
 
-    def find_along_lane_closest_point(self, p: T2value, tol: float = 1e-7,
-                                      control_sol: Optional[ControlSolParams] = None) -> Tuple[float, SE2value]:
+    def get_func(self, p: T2value) -> Callable[[float], float]:
         """
-        This function finds beta and closest pose on the lane based on car current pose p.
-        If no ControlSolParams are passed, the DgLanelet search version is used.
-        @param p: Current car pose
-        @param tol: Tolerance in the search
-        @param control_sol: The parameters for formulating a guess
-        @return: current beta and current closest pose on path
+        Get cost function for closest point on lane
+        @param p: current position
+        @return: cost function
         """
         def get_delta(beta):
             q0 = self.path.center_point(beta)
@@ -83,33 +79,56 @@ class DgLaneletControl:
             res = np.maximum(D1, D2)
             return res
 
+        return get_delta
+
+    def find_along_lane_closest_point(self, p: T2value, tol: float = 1e-7,
+                                      control_sol: Optional[ControlSolParams] = None) -> Tuple[float, SE2value]:
+        """
+        This function finds beta and closest pose on the lane based on car current pose p.
+        If no ControlSolParams are passed, the DgLanelet search version is used.
+        @param p: Current car pose
+        @param tol: Tolerance in the search
+        @param control_sol: The parameters for formulating a guess
+        @return: current beta and current closest pose on path
+        """
+
         bracket = (-1.0, len(self.path.control_points))
         if control_sol:
-            beta0 = self._find_along_lane_closest_point_control(bracket, get_delta, control_sol, tol)
+            beta0 = self._find_along_lane_closest_point_control(p, control_sol, tol)
         else:
-            res0 = minimize_scalar(get_delta, bracket=bracket, tol=tol)
+            res0 = minimize_scalar(self.get_func(p), bracket=bracket, tol=tol)
             beta0 = res0.x
 
         q = self.path.center_point(beta0)
         self.previous_along_lane = self.path.along_lane_from_beta(beta0)
         return beta0, q
 
-    def _find_along_lane_closest_point_control(self, bracket, func, params: ControlSolParams, tol: float = 1e-7) \
-            -> float:
-        factor = 1
-        bracket = list(bracket)
+    def _find_along_lane_closest_point_control(self, p: T2value, params: ControlSolParams, tol: float = 1e-7) -> float:
+        factor: float = 1
+        neg_delta, pos_delta = -10, params.current_v * params.dt * params.safety_factor
+        interval = (neg_delta, pos_delta)
         n_samples = int(len(self.path.control_points) * factor)
-        bracket_len_b = bracket[1] - bracket[0]
+        return self.find_along_lane_initial_guess(p, self.previous_along_lane, n_samples, tol, interval)
 
-        use_guess = True
-        if use_guess and self.previous_along_lane:
-            neg_delta, pos_delta = -10, params.current_v*params.dt*params.safety_factor
-            if self.previous_along_lane + pos_delta >= 0:
-                bracket[0] = max(self.path.beta_from_along_lane(self.previous_along_lane+neg_delta), bracket[0])
-                bracket[1] = min(self.path.beta_from_along_lane(self.previous_along_lane+pos_delta), bracket[1])
+    def find_along_lane_initial_guess(self, p: T2value, initial_guess: Optional[float], n_samples: int,
+                                      tol: float = 1e-7, interval: Tuple[float, float] = (-5, 5))\
+            -> float:
 
-        bracket_len = bracket[1]-bracket[0]
-        n_samples = max(2, int(n_samples * bracket_len / bracket_len_b))
+        func = self.get_func(p)
+        interval = list(interval)
+        n_control_points = len(self.path.control_points)
+
+        bracket: List[float, float] = [-1, n_control_points]
+        bracket_len_before: float = bracket[1] - bracket[0]
+
+        if initial_guess:
+            if initial_guess + interval[1] >= 0:
+                bracket[0] = max(self.path.beta_from_along_lane(initial_guess + interval[0]), bracket[0])
+                bracket[1] = min(self.path.beta_from_along_lane(initial_guess + interval[1]), bracket[1])
+
+        bracket_len_after: float = bracket[1] - bracket[0]
+        n_samples = max(2, int(n_samples * bracket_len_after / bracket_len_before))
+
         samples = np.linspace(bracket[0], bracket[1], n_samples)
         beta = 0
         cost = math.inf
@@ -120,9 +139,9 @@ class DgLaneletControl:
                 beta = sample
                 cost = c_cost
 
-        interval = bracket_len / (n_samples - 1)
-        bracket = (beta - interval, beta + interval)
-        bracket = (bracket[0], bracket[1])
+        new_interval = bracket_len_after / (n_samples - 1)
+        bracket = [beta - new_interval, beta + new_interval]
+        bracket: Tuple[float, float] = (bracket[0], bracket[1])
 
         res0 = minimize_scalar(func, bracket=bracket, tol=tol)
         beta = res0.x

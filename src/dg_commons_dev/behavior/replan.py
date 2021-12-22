@@ -83,10 +83,8 @@ class Replan(Situation[SituationObservations, ReplanDescription]):
         self.obs = new_obs
         my_name: PlayerName = new_obs.my_name
         agents: MutableMapping[PlayerName, PlayerObservations] = new_obs.agents
-        path: DgLanelet = self.obs.planned_path
-        beta, q = path.find_along_lane_closest_point(np.array([agents[my_name].state.x,
-                                                               agents[my_name].state.y]), 10e-3)
-        along_lane: float = path.along_lane_from_beta(beta)
+        path: DgLanelet = self.obs.planned_path[0]
+        along_lane: float = self.obs.planned_path[1]
         polygon, polygons = intentions_prediction(self._get_replanning_dist(agents[my_name].state.vx),
                                                   path, along_lane)
         other_name: PlayerName = PlayerName("StaticObs")

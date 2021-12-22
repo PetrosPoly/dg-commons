@@ -78,10 +78,10 @@ class Stanley(LateralController):
             self.speed = new_obs.vx
 
         p, _, _ = translation_angle_scale_from_E2(front_pose)
+        self.current_beta = self.control_path.find_along_lane_initial_guess(p, self.along_lane,
+                                                                            100 * len(self.path.control_points))
+        q0 = self.path.center_point(self.current_beta)
 
-        control_sol_params = self.control_path.ControlSolParams(new_obs.vx, self.params.t_step)
-        self.current_beta, q0 = self.control_path.find_along_lane_closest_point(p, tol=1e-4,
-                                                                                control_sol=control_sol_params)
         path_approx = True
         if path_approx:
             pos1, angle1, pos2, angle2, pos3, angle3 = self.next_pos(self.current_beta)
