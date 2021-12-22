@@ -110,28 +110,12 @@ def get_weight_from_lanelets(lanelet_network: LaneletNetwork, id_lanelet_1: int,
         raise ValueError("You are trying to assign a weight but no edge exists.")
 
 
-def split_lanelet_into_polygons_new(lanelet: Lanelet, max_length: float) -> List[tuple[Polygon, int]]:
-    """
-    Split a lanelet in smaller polygons by dividing uniformly along the centerline in curvilinear coordinates.
-    Return list of polygons and unique index for each polygon.
-
-    :param lanelet: Commonroad lanelet to divide into smaller polygons
-    :param max_length:  Maximum length along the lanelet centerline which is accepted as centerline
-                        length for a polygon. The algorithm will try and make polygons with uniform length along the
-                        centerline and length closes to max_length as possible.
-    """
-
+def split_lanelet_into_polygons_new(lanelet: Lanelet, max_length: float) -> List[Polygon]:
     lanelet_length = lanelet.distance[-1]
-
-    # if lanelet is too short, return polygon without diving it
-    if lanelet_length <= max_length:
-        return [(lanelet.polygon.shapely_object, lanelet.lanelet_id * resource_id_factor)]
-
     n_polygons = lanelet_length // max_length + 1
-    polygon_length = lanelet_length / n_polygons
-
     left_vertices = lanelet.left_vertices
     right_vertices = lanelet.right_vertices
+    polygon_length = lanelet_length / n_polygons  # check this is of type float
 
     counter = 0
     current_polygon_base_id = lanelet.lanelet_id * resource_id_factor
@@ -140,66 +124,63 @@ def split_lanelet_into_polygons_new(lanelet: Lanelet, max_length: float) -> List
 
     current_polygon_vertices_l = []
     current_polygon_vertices_r = []
-
     previous_index_before = 0
 
-    # handle first polygon with n=0
+    #
     previous_left_interp = Point(left_vertices[0])
     previous_right_interp = Point(right_vertices[0])
 
     for n in range(int(n_polygons)):
 
-        current_distance = (n + 1) * polygon_length
+        # after
+        current_length = (n + 1) * polygon_length
 
-        # return index in distance vector after the current distance
-        # index after is expected to always be >1
-        # index_after = np.where(lanelet.distance >= current_distance)[0][0]
-        index_after = next((el_idx for el_idx, el in enumerate(lanelet.distance) if el > current_distance), None)
-        # condition true if current_distance == lanelet.distance[-1]
-        if index_after is None:
-            index_after = len(lanelet.distance)-1
+        index_after = np.where(lanelet.distance >= current_length)[0]
+
+        if len(index_after) == 0:
+            print("This is a strange case")
+            print(current_length)
+            print(lanelet.distance)
+
+        index_after = index_after[0]
 
         index_before = index_after - 1
 
-        # at first iteration with n=0 this means appending the initial points of the lanelet
-        current_polygon_vertices_l.append(previous_left_interp)
-        current_polygon_vertices_r.append(previous_right_interp)
+        if n != 0:
+            current_polygon_vertices_l.append(previous_left_interp)
+            current_polygon_vertices_r.append(previous_right_interp)
 
-        # consider control points that may be in-between start and end of polygon
+        # consider intermediate points
         if previous_index_before != index_before:
-            for idx in range(index_before - previous_index_before):
-                index_intermediate = previous_index_before + (idx + 1)
+            for i in range(index_before - previous_index_before + 1):
+                index_intermediate = previous_index_before + i
                 current_polygon_vertices_l.append(left_vertices[index_intermediate])
                 current_polygon_vertices_r.append(right_vertices[index_intermediate])
 
-        if n != (int(n_polygons) - 1):
-            # interpolate on left and right boundaries
-            fraction = (current_distance - lanelet.distance[index_before]) \
-                       / (lanelet.distance[index_after] - lanelet.distance[index_before])
-            left_points = [left_vertices[index_before], left_vertices[index_after]]
-            right_points = [right_vertices[index_before], right_vertices[index_after]]
-            left_interp_point = Point(interpolate2d(fraction=fraction, points=left_points))
-            right_interp_point = Point(interpolate2d(fraction=fraction, points=right_points))
+        # interpolate on left and right boundaries
+        fraction = (current_length - lanelet.distance[index_before]) \
+                   / (lanelet.distance[index_after] - lanelet.distance[index_before])
+        left_points = [lanelet.left_vertices[index_before], lanelet.left_vertices[index_after]]
+        right_points = [lanelet.right_vertices[index_before], lanelet.right_vertices[index_after]]
+        left_interp_point = Point(interpolate2d(fraction=fraction, points=left_points))
+        right_interp_point = Point(interpolate2d(fraction=fraction, points=right_points))
 
-            # store for next polygon
-            previous_left_interp = left_interp_point
-            previous_right_interp = right_interp_point
+        previous_left_interp = left_interp_point
+        previous_right_interp = right_interp_point
 
-            current_polygon_vertices_l.append(left_interp_point)
-            current_polygon_vertices_r.append(right_interp_point)
+        current_polygon_vertices_l.append(left_interp_point)
+        current_polygon_vertices_r.append(right_interp_point)
 
-        # handle last polygon
-        if n == (int(n_polygons) - 1):
-            current_polygon_vertices_l.append(left_vertices[-1])
-            current_polygon_vertices_r.append(right_vertices[-1])
+        #current_polygon_vertices_l.append(left_vertices[index_after])
+        #current_polygon_vertices_r.append(right_vertices[index_after])
 
         # create desired structure for Shapely LinearRing
-        current_polygon_vertices_r.insert(0, current_polygon_vertices_l[0])
+        current_polygon_vertices_l.insert(0, current_polygon_vertices_r[0])
+        current_polygon_vertices_r.append(current_polygon_vertices_l[-1])
+        del current_polygon_vertices_l[-1]
+        del current_polygon_vertices_r[0]
         current_polygon_vertices_r.reverse()
-
-        current_polygon_vertices_l.extend(current_polygon_vertices_r)
-        linear_ring = LinearRing(current_polygon_vertices_l)
-        current_polygon = Polygon(linear_ring)
+        current_polygon = Polygon(LinearRing(current_polygon_vertices_l.extend(current_polygon_vertices_r)))
 
         # clear lists for next polygon
         current_polygon_vertices_l.clear()
@@ -483,7 +464,7 @@ class ResourceNetwork:
 
     def get_occupancy_children(self, occupied_resources: Set[int]) -> List[int]:
         """
-        Compute the children of the nodes in the "occupancy zone" as computed by "get_potential_occupancy"
+        Compute the children of the nodes in the "occupancy zone" as computed by "get_possible_resources"
 
         :param occupied_resources: part of digraph where the ego could be on his journey to the goal
         """
@@ -580,6 +561,15 @@ class ResourceNetwork:
 
         return resource
 
+
+
+
+
+
+
+
+
+
     def _init_graph(self, lanelet_network: LaneletNetwork, max_length: Optional[float]):
         if max_length is None:
             self._init_road_graph(lanelet_network=lanelet_network)
@@ -603,7 +593,7 @@ class ResourceNetwork:
             # skip excluded lanelets
             if lanelet.lanelet_id in self.excluded_lanelets:
                 continue
-            resources[lanelet.lanelet_id] = split_lanelet_into_polygons_new(
+            resources[lanelet.lanelet_id] = split_lanelet_into_polygons(
                 lanelet=lanelet_network.find_lanelet_by_id(lanelet.lanelet_id), max_length=max_length)
 
         for lanelet in lanelet_network.lanelets:
@@ -754,7 +744,7 @@ class ResourceNetwork:
             if lanelet.lanelet_id in self.excluded_lanelets:
                 continue
             if max_length is not None:
-                new_resources = split_lanelet_into_polygons_new(
+                new_resources = split_lanelet_into_polygons(
                     lanelet=lanelet_network.find_lanelet_by_id(lanelet.lanelet_id), max_length=max_length)
             else:
                 new_resources = [(lanelet.polygon.shapely_object, lanelet.lanelet_id * resource_id_factor)]
@@ -1133,10 +1123,9 @@ if __name__ == '__main__':
     test_lanelet = 3318
     test_lanelet_adj_right = 3316
     test_lanelet_adj_left = 3320
-    new_polygons = split_lanelet_into_polygons_new(net.find_lanelet_by_id(test_lanelet), max_length=10.0)
-    new_polygons_right = split_lanelet_into_polygons_new(net.find_lanelet_by_id(test_lanelet_adj_right),
-                                                         max_length=10.0)
-    new_polygons_left = split_lanelet_into_polygons_new(net.find_lanelet_by_id(test_lanelet_adj_left), max_length=10.0)
+    new_polygons = split_lanelet_into_polygons(net.find_lanelet_by_id(test_lanelet), max_length=10.0)
+    new_polygons_right = split_lanelet_into_polygons(net.find_lanelet_by_id(test_lanelet_adj_right), max_length=10.0)
+    new_polygons_left = split_lanelet_into_polygons(net.find_lanelet_by_id(test_lanelet_adj_left), max_length=10.0)
 
     old_polygon = net.find_lanelet_by_id(test_lanelet).polygon.shapely_object
     old_polygon_right = net.find_lanelet_by_id(test_lanelet_adj_right).polygon.shapely_object
@@ -1159,7 +1148,7 @@ if __name__ == '__main__':
         x, y = polygon[0].exterior.xy
         plt.plot(x[:], y[:], '--')
 
-    plt.savefig("debugging_21-12-2021.png")
+    plt.savefig("debugging_10-12-2021.png")
     plt.close()
 
     """
@@ -1203,7 +1192,7 @@ if __name__ == '__main__':
     plt.close()"""
 
     # obj = RoadGraph(lanelet_network=net, planning_problem_set=planning_problem_set)
-    # occupancy_nodes, _ = obj.get_potential_occupancy(start_node=3512, end_node=3450)
+    # occupancy_nodes, _ = obj.get_possible_resources(start_node=3512, end_node=3450)
     # obj.plot_graph(filename='graph_only', start_node=3512, end_node=3450)
 
     # test mutability
