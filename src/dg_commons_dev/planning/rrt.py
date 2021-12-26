@@ -123,6 +123,7 @@ class RRT(Planner):
         self.start = start
         self.end = goal
         self.node_list = []
+        self.can_reach_end = []
         self.obstacle_list = obstacle_list
         self.node_list = [self.start]
         self.boundaries = sampling_bounds

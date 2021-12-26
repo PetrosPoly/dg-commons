@@ -157,14 +157,6 @@ class Emergency(Situation[SituationObservations, EmergencyDescription]):
         return self.polygon_plotter.next_frame()
         # This is for plotting purposes, can be ignored
 
-    def _get_min_safety_dist(self, vel: float) -> float:
-        """
-        The distance covered in x [s] travelling at vel
-        @param vel: Current velocity
-        @return: Distance covered
-        """
-        return vel * self.safety_time_braking
-
     def is_true(self) -> bool:
         """
         Whether an emergency situation is occurring

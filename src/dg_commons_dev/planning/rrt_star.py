@@ -78,6 +78,7 @@ class RRTStar(RRT):
         self.end = goal
         self.boundaries = sampling_bounds
         self.obstacle_list = obstacle_list
+        self.can_reach_end = []
         self.node_list = [self.start]
 
         for i in range(self.max_iter):

@@ -3,6 +3,8 @@ import math
 from abc import ABC, abstractmethod
 import random
 from typing import Tuple
+from shapely.geometry import Polygon, MultiPolygon, MultiPoint, Point
+import numpy as np
 
 
 class BaseBoundaries(ABC):
@@ -15,6 +17,16 @@ class BaseBoundaries(ABC):
         """
         Sample uniformly at random inside the boundaries, returns (x, y)
         """
+        pass
+
+    @abstractmethod
+    def x_bounds(self) -> Tuple[float, float]:
+        """ Returns x_bounds of the sampling space """
+        pass
+
+    @abstractmethod
+    def y_bounds(self) -> Tuple[float, float]:
+        """ Returns y bounds of the sampling space """
         pass
 
 
@@ -47,6 +59,42 @@ class RectangularBoundaries(BaseBoundaries):
         x: float = random.uniform(self.x_min, self.x_max)
         y: float = random.uniform(self.y_min, self.y_max)
         return x, y
+
+
+class PolygonBoundaries(BaseBoundaries):
+    """
+    Class for 2D bounded sampling inside a polygon
+    """
+
+    def __init__(self, boundaries: Polygon):
+        self.polygon: Polygon = boundaries
+        min_x, min_y, max_x, max_y = self.polygon.bounds
+        self.x_b = (min_x, max_x)
+        self.y_b = (min_y, max_y)
+
+    def random_sampling(self) -> Tuple[float, float]:
+        """
+        Sample uniformly at random inside the polygon
+        @return: x and y position
+        """
+        point = None
+        while not point:
+            sh_point = Point(random.uniform(*self.x_b), random.uniform(*self.y_b))
+            if self.polygon.contains(sh_point):
+                point = (sh_point.x, sh_point.y)
+        return point
+
+    def x_bounds(self) -> Tuple[float, float]:
+        """
+        @return: tuple with x boundaries: (min, max)
+        """
+        return self.x_b
+
+    def y_bounds(self) -> Tuple[float, float]:
+        """
+        @return: tuple with y boundaries: (min, max)
+        """
+        return self.y_b
 
 
 def uniform_sampling(boundaries: BaseBoundaries,

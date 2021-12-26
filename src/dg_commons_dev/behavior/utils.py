@@ -32,6 +32,9 @@ class SituationObservations:
     dt_commands: float
     """ Time interval between two subsequent calls """
 
+    distances: Tuple[float, float]
+    """ Look ahead distance, safety distance"""
+
     planned_path: Tuple[DgLanelet, float] = (None, None)
     """ Long term path and current position on it """
 
@@ -99,7 +102,7 @@ def intentions_prediction(look_ahead_distance: float, path: DgLanelet, along_lan
     for i in range(n - 1):
         p1, p2 = l_polygon[i], l_polygon[i + 1]
         p3, p4 = r_polygon[i + 1], r_polygon[i]
-        polygons[(i + 0.5) * resolution] = Polygon((p1, p2, p3, p4, p1))
+        polygons[along_lane + (i + 0.5) * resolution] = Polygon((p1, p2, p3, p4, p1))
 
     r_polygon.reverse()
 

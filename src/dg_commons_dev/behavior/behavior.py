@@ -78,6 +78,11 @@ class SpeedBehaviorParam(BaseParams):
     replan_params: ReplanParams = ReplanParams()
     """ Replan Params  """
 
+    min_look_ahead: float = 30
+    """ Minimal look ahead distance """
+    min_safety_dist: float = 20
+    """ Minimal safety distance """
+
     dt_commands: float = 0.1
     """ Period of decision making """
     def __post_init__(self):
@@ -101,9 +106,12 @@ class SpeedBehavior(Behavior[MutableMapping[PlayerName, PlayerObservations], Tup
         self.yield_to = self.params.yield_to(self.params.yield_params, self.params.safety_time_braking)
         self.emergency = self.params.emergency(self.params.emergency_params, self.params.safety_time_braking, plot=True)
         self.cruise = self.params.cruise(self.params.cruise_params, self.params.safety_time_braking, plot=True)
-        self.replan = self.params.replan(self.params.replan_params, self.params.safety_time_braking, plot = True)
-        self.obs: SituationObservations = SituationObservations(my_name=self.my_name, dt_commands=params.dt_commands)
+        self.replan = self.params.replan(self.params.replan_params, self.params.safety_time_braking, plot=True)
+        self.obs: SituationObservations = SituationObservations(my_name=self.my_name, dt_commands=params.dt_commands,
+                                                                distances=(self.params.min_look_ahead,
+                                                                           self.params.min_safety_dist))
         self.situation: BehaviorSituation = BehaviorSituation()
+        self.something_found: Optional[float] = None
         """ The speed reference"""
 
     def update_observations(self, agents: MutableMapping[PlayerName, PlayerObservations], ref: Reference,
@@ -120,6 +128,7 @@ class SpeedBehavior(Behavior[MutableMapping[PlayerName, PlayerObservations], Tup
         self.obs.rel_poses = agents_rel_pose
         self.obs.static_obstacles = static_obstacles
         self.obs.planned_path = (ref.path, ref.along_lane)
+        self.obs.distances = self._get_look_ahead(agents[self.my_name].state.vx)
 
     def get_situation(self, at: float) -> Tuple[float, BehaviorSituation, Any]:
         self.obs.my_name = self.my_name
@@ -130,12 +139,16 @@ class SpeedBehavior(Behavior[MutableMapping[PlayerName, PlayerObservations], Tup
         if self.emergency.is_true():
             self.situation.situation = self.emergency
             self.speed_ref = 0
+            self.something_found = self.obs.distances[0]
         elif self.replan.is_true():
             self.situation.situation = self.replan
             self.speed_ref = self.cruise.infos().speed_ref
+            self.something_found = self.obs.distances[0]
         else:
             self.situation.situation = self.cruise
             self.speed_ref = self.cruise.infos().speed_ref
+            if self.cruise.infos().is_following:
+                self.something_found = self.obs.distances[0]
 
             # TODO: after having fixed yield_to class, find condition for which situation between cruise and yield
             # TODO: is more prominent
@@ -158,3 +171,15 @@ class SpeedBehavior(Behavior[MutableMapping[PlayerName, PlayerObservations], Tup
     def simulation_ended(self):
         self.emergency.simulation_ended()
         self.cruise.simulation_ended()
+
+    def _get_look_ahead(self, vel: float) -> Tuple[float, float]:
+        """
+        Compute look ahead distance
+        @param vel: Current velocity
+        @return: Look ahead distance
+        """
+        look_ahead = self.params.safety_time_braking * vel + self.params.min_look_ahead
+        if self.something_found:
+            look_ahead = max(self.something_found, look_ahead)
+        safety_dist = self.params.safety_time_braking * vel + self.params.min_safety_dist
+        return look_ahead, safety_dist

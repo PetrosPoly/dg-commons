@@ -9,7 +9,6 @@ from dg_commons import PlayerName, X
 from dg_commons_dev.utils import BaseParams
 from shapely.geometry.base import BaseGeometry
 from dg_commons.maps.lanes import DgLanelet
-import numpy as np
 
 
 @dataclass
@@ -41,12 +40,6 @@ class CruiseParams(BaseParams):
     nominal_speed: float = kmh2ms(40)
     """Nominal desired speed"""
 
-    min_safety_distance: float = 5.0
-    """ Min distance to keep from vehicle ahead at v = 0 """
-
-    look_ahead_distance_enhancement: float = 3.0
-    """ Look ahead distance = look_ahead_distance_enhancement * safety distance"""
-
     kp_back: float = 2.0
     kp_forward: float = 1.0
     """ kp for computing speed ref when 
@@ -69,6 +62,8 @@ class Cruise(Situation[SituationObservations, CruiseDescription]):
         self.obs: Optional[SituationObservations] = None
         self.cruise_situation: CruiseDescription = CruiseDescription()
         self.polygon_plotter = SituationPolygons(plot=plot)
+        self.found_something = None
+        self.current_look_ahead: float = float("nan")
 
     def update_observations(self, new_obs: SituationObservations)\
             -> Tuple[List[Polygon], List[SituationPolygons.PolygonClass]]:
@@ -84,12 +79,12 @@ class Cruise(Situation[SituationObservations, CruiseDescription]):
         agents: MutableMapping[PlayerName, PlayerObservations] = new_obs.agents
 
         my_state: X = agents[my_name].state
-        my_vel: float = my_state.vx
         my_occupancy: Polygon = agents[my_name].occupancy
 
         path: DgLanelet = self.obs.planned_path[0]
         along_lane: float = self.obs.planned_path[1]
-        my_polygon, _ = intentions_prediction(self._get_look_ahead_distance(my_vel), path, along_lane)
+        self.current_look_ahead = new_obs.distances[0]
+        my_polygon, _ = intentions_prediction(self.current_look_ahead, path, along_lane)
 
         # my_polygon, _ = occupancy_prediction(agents[my_name].state, self._get_look_ahead_time(my_vel))
         self.polygon_plotter.plot_polygon(my_polygon, SituationPolygons.PolygonClass(dangerous_zone=True))
@@ -109,7 +104,7 @@ class Cruise(Situation[SituationObservations, CruiseDescription]):
 
             if not intersection.is_empty:
                 distance: float = my_occupancy.distance(other_occupancy)
-                min_distance: float = self._get_min_safety_dist(my_vel)
+                min_distance: float = new_obs.distances[1]
                 if distance < min_distance:
                     speed_ref: float = \
                         other_vel + (distance - min_distance) / min_distance * other_vel * self.params.kp_back
@@ -137,8 +132,9 @@ class Cruise(Situation[SituationObservations, CruiseDescription]):
             other_name: PlayerName = PlayerName("StaticObs")
 
             if not intersection.is_empty:
+                self.found_something = (True, self.current_look_ahead)
                 distance: float = my_occupancy.distance(other_occupancy)
-                min_distance: float = self._get_min_safety_dist(my_vel)
+                min_distance: float = new_obs.distances[1]
                 if distance < min_distance:
                     speed_ref: float = \
                         other_vel + (distance - min_distance) / min_distance * other_vel * self.params.kp_back
@@ -157,14 +153,6 @@ class Cruise(Situation[SituationObservations, CruiseDescription]):
 
         return self.polygon_plotter.next_frame()
 
-    def _get_min_safety_dist(self, vel: float) -> float:
-        """
-        The minimal distance to keep between two vehicles.
-        @param vel: Current velocity
-        @return: Distance
-        """
-        return vel * self.safety_time_braking + self.params.min_safety_distance
-
     def _get_look_ahead_time(self, vel: float) -> float:
         """
         How far in the future should I look
@@ -172,17 +160,9 @@ class Cruise(Situation[SituationObservations, CruiseDescription]):
         @return: Time
         """
         if vel == 0:
-            return self._get_look_ahead_distance(vel)  # As if vel = 1 m/s
+            return self.current_look_ahead  # As if vel = 1 m/s
         else:
-            return self._get_look_ahead_distance(vel) / vel
-
-    def _get_look_ahead_distance(self, vel: float) -> float:
-        """
-        Hor far should I look
-        @param vel: Vehicle velocity
-        @return: Look ahead distance
-        """
-        return self._get_min_safety_dist(vel) * self.params.look_ahead_distance_enhancement
+            return self.current_look_ahead / vel
 
     def is_true(self) -> bool:
         """

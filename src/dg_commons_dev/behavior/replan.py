@@ -1,5 +1,4 @@
 import numpy as np
-
 from dg_commons_dev.behavior.behavior_types import Situation
 from dataclasses import dataclass, field
 from typing import Union, List, Tuple, MutableMapping, Optional
@@ -47,8 +46,7 @@ class ReplanDescription:
 
 @dataclass
 class ReplanParams(BaseParams):
-    min_replanning_distance: float = 5.0
-    """ Min distance for replanning to happen """
+    pass
 
 
 class Replan(Situation[SituationObservations, ReplanDescription]):
@@ -81,12 +79,11 @@ class Replan(Situation[SituationObservations, ReplanDescription]):
         @return: Polygons and polygon classes for plotting purposes
         """
         self.obs = new_obs
-        my_name: PlayerName = new_obs.my_name
-        agents: MutableMapping[PlayerName, PlayerObservations] = new_obs.agents
         path: DgLanelet = self.obs.planned_path[0]
         along_lane: float = self.obs.planned_path[1]
-        polygon, polygons = intentions_prediction(self._get_replanning_dist(agents[my_name].state.vx),
+        polygon, polygons = intentions_prediction(new_obs.distances[0],
                                                   path, along_lane)
+
         other_name: PlayerName = PlayerName("StaticObs")
 
         obstacles = []
@@ -99,7 +96,7 @@ class Replan(Situation[SituationObservations, ReplanDescription]):
         entered: bool = False
 
         if obstacles:
-            for (along_lane, poly) in polygons.items():
+            for (along, poly) in polygons.items():
 
                 intersects: bool = False
                 for j, obs in enumerate(obstacles):
@@ -108,13 +105,13 @@ class Replan(Situation[SituationObservations, ReplanDescription]):
 
                 if intersects and not entered:
                     entered = True
-                    entry_points.append(along_lane)
-                elif not intersects and entered:
-                    exit_points.append(along_lane)
+                    entry_points.append(along)
+                elif (not intersects) and entered:
+                    exit_points.append(along)
                     entered = False
 
         if len(entry_points) != len(exit_points):
-            exit_points.append(along_lane)
+            exit_points.append(None)
         assert len(entry_points) == len(exit_points)
 
         if entry_points:
@@ -125,14 +122,6 @@ class Replan(Situation[SituationObservations, ReplanDescription]):
             self.replan_situation = ReplanDescription(False)
 
         return self.polygon_plotter.next_frame()
-
-    def _get_replanning_dist(self, vel: float) -> float:
-        """
-        The minimal distance to keep between two vehicles.
-        @param vel: Current velocity
-        @return: Distance
-        """
-        return vel * self.safety_time_braking + self.params.min_replanning_distance
 
     def is_true(self) -> bool:
         """
