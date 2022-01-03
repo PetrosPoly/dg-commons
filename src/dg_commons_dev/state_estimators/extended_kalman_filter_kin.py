@@ -2,7 +2,7 @@ import numpy as np
 from scipy.integrate import solve_ivp
 from dg_commons.sim.models.vehicle import VehicleState, VehicleCommands, VehicleGeometry
 from dg_commons.sim.models.vehicle_utils import steering_constraint, VehicleParameters
-from dg_commons.sim.models.model_utils import acceleration_constraint
+from dg_commons.sim.models.model_utils import apply_full_acceleration_limits
 from typing import Optional
 from dg_commons_dev.utils import SemiDef
 from dg_commons_dev.state_estimators.dropping_trechniques import DroppingTechniques, \
@@ -185,7 +185,7 @@ class ExtendedKalmanKin(Estimator):
         ydot = vx * sinth + vy * costh
 
         ddelta = steering_constraint(x0.delta, u.ddelta, self.params.vehicle_params)
-        acc = acceleration_constraint(x0.vx, u.acc, self.params.vehicle_params)
+        acc = apply_full_acceleration_limits(x0.vx, u.acc, self.params.vehicle_params)
         return VehicleState(x=xdot, y=ydot, theta=dtheta, vx=acc, delta=ddelta) + self.current_model_noise_realization
 
     @staticmethod

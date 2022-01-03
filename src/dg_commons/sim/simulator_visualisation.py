@@ -55,7 +55,6 @@ class ZOrders(IntEnum):
     TRAJECTORY = 45
     TRAJECTORY_MARKER = 46
     TIME_TEXT = 50
-    ENV_OBSTACLE = 31
 
 
 class SimRenderer(SimRendererABC):
