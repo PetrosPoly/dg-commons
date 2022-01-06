@@ -8,6 +8,7 @@ from dg_commons_dev.planning.rrt_utils.sampling import uniform_sampling, BaseBou
 from dg_commons_dev.planning.rrt_utils.steering import straight_to
 from dg_commons_dev.planning.rrt_utils.nearest_neighbor import distance_cost, naive
 from shapely.geometry.base import BaseGeometry
+from dg_commons_dev.planning.rrt_utils.goal_region import GoalRegion
 
 
 @dataclass
@@ -18,7 +19,7 @@ class RRTStarParams(RRTParams):
     """ Maximal number of iterations """
     goal_sample_rate: float = 5
     """ Rate at which, on average, the goal position is sampled in % """
-    sampling_fct: Callable[[BaseBoundaries, Node, float], Node] = uniform_sampling
+    sampling_fct: Callable[[BaseBoundaries, GoalRegion, float], Node] = uniform_sampling
     """ 
     Sampling function: takes sampling boundaries, goal node, goal sampling rate and returns a sampled node
     """
@@ -63,12 +64,12 @@ class RRTStar(RRT):
         """
         super().__init__(params)
 
-    def planning(self, start: Node, goal: Node, obstacle_list: List[BaseGeometry], sampling_bounds: BaseBoundaries,
-                 search_until_max_iter: bool = False) -> Optional[List[Node]]:
+    def planning(self, start: Node, goal: GoalRegion, obstacle_list: List[BaseGeometry],
+                 sampling_bounds: BaseBoundaries, search_until_max_iter: bool = False) -> Optional[List[Node]]:
         """
         RRT Star planning
         @param start: Starting node
-        @param goal: Goal node
+        @param goal: Goal region
         @param obstacle_list: List of shapely objects representing obstacles
         @param sampling_bounds: Boundaries in the samples space
         @param search_until_max_iter: flag for whether to search until max_iter
@@ -214,7 +215,8 @@ def main(gx=6.0, gy=10.0):
     obstacle_list = [Polygon(((5, 4), (5, 6), (10, 6), (10, 4), (5, 4))), LineString([Point(0, 8), Point(5, 8)])]
     bounds: BaseBoundaries = RectangularBoundaries((-2, 15, -2, 15))
     rrt = RRTStar()
-    rrt.planning(start=Node(0, 0), goal=Node(gx, gy), sampling_bounds=bounds, obstacle_list=obstacle_list)
+    rrt.planning(start=Node(0, 0), goal=GoalRegion(Node(gx, gy), 0, 0.5, 0.5, 0.5),
+                 sampling_bounds=bounds, obstacle_list=obstacle_list, search_until_max_iter=False)
     rrt.plot_results(create_animation=True)
 
 

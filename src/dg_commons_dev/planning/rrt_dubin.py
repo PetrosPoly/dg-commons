@@ -9,6 +9,7 @@ from dg_commons_dev.planning.rrt_utils.steering import dubin_curves
 from dg_commons_dev.planning.rrt_utils.nearest_neighbor import  naive, dubin_distance_cost
 from dg_commons_dev.planning.rrt_utils.sampling import BaseBoundaries
 from shapely.geometry.base import BaseGeometry
+from dg_commons_dev.planning.rrt_utils.goal_region import GoalRegion
 
 
 @dataclass
@@ -19,7 +20,7 @@ class RRTDubinParams(RRTParams):
     """ Maximal number of iterations """
     goal_sample_rate: float = 10
     """ Rate at which, on average, the goal position is sampled in % """
-    sampling_fct: Callable[[BaseBoundaries, Node, float], Node] = uniform_sampling
+    sampling_fct: Callable[[BaseBoundaries, GoalRegion, float], Node] = uniform_sampling
     """ 
     Sampling function: takes sampling boundaries, goal node, goal sampling rate and returns a sampled node
     """
@@ -64,8 +65,8 @@ class RRTDubins(RRT):
         """
         super().__init__(params)
 
-    def planning(self, start: Node, goal: Node, obstacle_list: List[BaseGeometry], sampling_bounds: BaseBoundaries,
-                 search_until_max_iter: bool = False) -> Optional[List[Node]]:
+    def planning(self, start: Node, goal: GoalRegion, obstacle_list: List[BaseGeometry],
+                 sampling_bounds: BaseBoundaries, search_until_max_iter: bool = False) -> Optional[List[Node]]:
         """
         RRT Dubin planning
         @param start: Starting node
@@ -120,7 +121,7 @@ def main():
     rand_area = RectangularBoundaries((-2, 15, -2, 15))
 
     rrt = RRTDubins()
-    rrt.planning(start, goal, obstacle_list, rand_area)
+    rrt.planning(start, GoalRegion(goal, goal.yaw, 1, 1, 0.5), obstacle_list, rand_area)
     rrt.plot_results(create_animation=True)
 
 

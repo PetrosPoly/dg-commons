@@ -7,6 +7,8 @@ import itertools
 from dg_commons_dev.utils import BaseParams
 from scipy.interpolate import griddata
 from shapely.geometry import Point
+from geometry import SE2value
+from dg_commons.geo import SE2_apply_T2, translation_angle_from_SE2, transform_xy
 
 
 @dataclass
@@ -338,6 +340,7 @@ class CircularGrid:
     def __init__(self, radius: float, n_point_per_line: int, n_lines: int, d_first_ring: float,
                  values: np.ndarray = None):
         self.radius = radius
+        self.internal = d_first_ring
         self.n_lines = n_lines
         self.n_points = n_point_per_line
 
@@ -368,12 +371,8 @@ class CircularGrid:
         self.int_radius = np.amax(np.linalg.norm(np.column_stack((self._pos_x[:, 0], self._pos_y[:, 0])), axis=1))
 
         safety_against_numerical_errors = 0.95
-        self.ext_radius *= math.cos(self.delta_ang/2) * safety_against_numerical_errors
-        self.int_radius *= 1 / safety_against_numerical_errors
-        outer_circle: Point = Point((0, 0)).buffer(self.ext_radius)
-        inner_circle: Point = Point((0, 0)).buffer(self.int_radius)
-        self.circle = outer_circle.difference(inner_circle)
-        """ This hollow circle describes conservatively the room occupied by the equilateral polygon of measurements """
+        self._ext_radius = self.ext_radius * math.cos(self.delta_ang/2) * safety_against_numerical_errors
+        self._int_radius = self.int_radius * 1 / safety_against_numerical_errors
 
         self._griddata_positions = np.zeros((n_lines * n_point_per_line, 2))
         self._griddata_values = np.zeros((n_lines * n_point_per_line, 1))
@@ -596,7 +595,12 @@ class CircularGrid:
         @param: Position to be checked
         @return: Whether a passed position is inside the equilateral polygon
         """
-        return self.int_radius < np.linalg.norm(pos) < self.ext_radius
+        return self._int_radius < np.linalg.norm(pos) < self._ext_radius
+
+    def apply_se2(self, q: SE2value):
+        points_array = np.hstack((self._griddata_positions, np.ones((self._griddata_positions.shape[0], 1)))).T
+        points = q @ points_array
+        return points.T[:, :2]
 
 
 PDistribution = Union[Exponential]

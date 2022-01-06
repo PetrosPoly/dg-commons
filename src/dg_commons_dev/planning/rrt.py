@@ -13,6 +13,7 @@ from dg_commons.sim.models.vehicle import VehicleGeometry
 from dg_commons_dev.planning.planner_base import Planner
 from dg_commons_dev.utils import BaseParams
 from dg_commons_dev.planning.rrt_utils.dubins_path_planning import plot_arrow
+from dg_commons_dev.planning.rrt_utils.goal_region import GoalRegion
 
 
 @dataclass
@@ -23,7 +24,7 @@ class RRTParams(BaseParams):
     """ Maximal number of iterations """
     goal_sample_rate: float = 5
     """ Rate at which, on average, the goal position is sampled in % """
-    sampling_fct: Callable[[BaseBoundaries, Node, float], Node] = uniform_sampling
+    sampling_fct: Callable[[BaseBoundaries, GoalRegion, float], Node] = uniform_sampling
     """ 
     Sampling function: takes sampling boundaries, goal node, goal sampling rate and returns a sampled node
     """
@@ -80,7 +81,7 @@ class RRT(Planner):
         """
         self.start: Node = Node(0, 0)
         """ Start node """
-        self.end: Node = Node(0, 0)
+        self.end: GoalRegion = GoalRegion(Node(0, 0, 0), 0, 0, 0)
         """ Goal node """
         self.node_list: List[Node] = []
         """ List of all reachable sampled nodes """
@@ -99,7 +100,7 @@ class RRT(Planner):
         self.max_iter: int = params.max_iter
 
         self.steering_fct: Callable[[Node, Node, float, float, float], Node] = params.steering_fct
-        self.sampling_fct: Callable[[BaseBoundaries, Node, float], Node] = params.sampling_fct
+        self.sampling_fct: Callable[[BaseBoundaries, GoalRegion, float], Node] = params.sampling_fct
         self.distance_meas: Callable[[Node, Node], float] = params.distance_meas
         self.nearest: Callable[[Node, List[Node], Callable[[Node, Node], float]], int] = params.nearest_neighbor_search
 
@@ -108,7 +109,7 @@ class RRT(Planner):
         self.curvature = params.max_curvature
         self.connect_circle_dist = params.connect_circle_dist
 
-    def planning(self, start: Node, goal: Node, obstacle_list: List[BaseGeometry], sampling_bounds: BaseBoundaries,
+    def planning(self, start: Node, goal: GoalRegion, obstacle_list: List[BaseGeometry], sampling_bounds: BaseBoundaries,
                  search_until_max_iter: bool = False) -> Optional[List[Node]]:
         """
         RRT planning
@@ -173,7 +174,7 @@ class RRT(Planner):
         """
         path: List[Node] = []
 
-        node = self.end
+        node = self.end.goal_node
         while node.parent:
             for (ix, iy) in zip(reversed(node.path_x), reversed(node.path_y)):
                 temp_node: Node = Node(ix, iy)
@@ -222,12 +223,13 @@ class RRT(Planner):
         new_node = self.node_list[-1]
         idx = len(self.node_list) - 1
 
-        if self.end.same(new_node):
+        if self.end.inside(new_node):
             self.can_reach_end.append(idx)
         else:
-            to_end = self.steering_fct(new_node, self.end, self.expand_dis, self.path_resolution, self.curvature)
+            to_end = self.steering_fct(new_node, self.end.goal_node,
+                                       self.expand_dis, self.path_resolution, self.curvature)
             if to_end:
-                end_reached = self.end.same(to_end)
+                end_reached = self.end.inside(to_end)
                 no_collision = self.check_collision(to_end, self.obstacle_list)
                 if end_reached and no_collision:
                     self.can_reach_end.append(idx)
@@ -240,16 +242,17 @@ class RRT(Planner):
         temp_nodes = []
         for idx in self.can_reach_end:
             node = self.node_list[idx]
-            if self.end.same(node):
+            if self.end.inside(node):
                 temp = node
             else:
-                temp = self.steering_fct(node, self.end, self.expand_dis, self.path_resolution, self.curvature)
+                temp = self.steering_fct(node, self.end.goal_node, self.expand_dis, self.path_resolution,
+                                         self.curvature)
             temp_nodes.append(temp)
 
         min_cost = min([end.cost for end in temp_nodes])
         for end in temp_nodes:
             if end.cost == min_cost:
-                self.end = end
+                self.end.goal_node = end
                 return
 
     def get_length(self) -> float:
@@ -283,7 +286,12 @@ class RRT(Planner):
                 plt.plot(*ob.xy)
 
         plt.plot(self.start.x, self.start.y, "xr")
-        plt.plot(self.end.x, self.end.y, "xr")
+        x, y = self.end.polygon.exterior.xy
+        plt.plot(x, y, 'b')
+        angle_polygon = self.end.angle_polygon()
+        if angle_polygon:
+            x, y = angle_polygon.exterior.xy
+            plt.plot(x, y, 'y')
         plt.axis("equal")
         plt.axis([-2, 15, -2, 15])
         plt.grid(True)
@@ -304,9 +312,9 @@ class RRT(Planner):
         y_lim = (y_lim[0] - delta, y_lim[1] + delta)
         plt.ylim(y_lim)
 
-        if self.start.is_yaw_considered and self.end.is_yaw_considered:
+        if self.start.is_yaw_considered and self.end.goal_node.is_yaw_considered:
             plot_arrow(self.start.x, self.start.y, self.start.yaw)
-            plot_arrow(self.end.x, self.end.y, self.end.yaw)
+            plot_arrow(self.end.goal_node.x, self.end.goal_node.y, self.end.goal_node.yaw)
         plt.savefig("test")
 
         if create_animation:
@@ -370,7 +378,8 @@ def main(gx=6.0, gy=10.0):
     obstacle_list = [Polygon(((5, 4), (5, 6), (10, 6), (10, 4), (5, 4))), LineString([Point(0, 8), Point(5, 8)])]
     bounds: BaseBoundaries = RectangularBoundaries((-2, 15, -2, 15))
     rrt = RRT()
-    rrt.planning(start=Node(0, 0), goal=Node(gx, gy), sampling_bounds=bounds, obstacle_list=obstacle_list)
+    rrt.planning(start=Node(0, 0), goal=GoalRegion(Node(gx, gy), 0, 0.5, 0.5, 0.5),
+                 sampling_bounds=bounds, obstacle_list=obstacle_list, search_until_max_iter=False)
     rrt.plot_results(create_animation=True)
 
 

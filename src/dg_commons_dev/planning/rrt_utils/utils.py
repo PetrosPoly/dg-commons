@@ -56,6 +56,7 @@ class Node:
 
         same_x_y: bool = close(self.x, other.x) and close(self.y, other.y)
         if self.is_yaw_considered:
+            # TODO: fix
             return (self.yaw, other.yaw) and same_x_y
         else:
             return same_x_y

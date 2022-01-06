@@ -98,22 +98,23 @@ class PolygonBoundaries(BaseBoundaries):
 
 
 def uniform_sampling(boundaries: BaseBoundaries,
-                     goal_node: Node, goal_sample_rate: float) -> Node:
+                     goal_region, goal_sample_rate: float) -> Node:
     """
     Sample a random node uniformly from available space.
     @param boundaries: limits the area, from which the sample is taken
-    @param goal_node: goal pose
+    @param goal_region: goal region
     @param goal_sample_rate: how often, on average, should the goal pose be sampled in %
     @return: A node with the sampled position (and sampled orientation if requested).
     """
+    goal_node: Node = goal_region.goal_node
 
     if random.randint(0, 100) > goal_sample_rate:
         pose: Tuple[float, float] = boundaries.random_sampling()
 
         if goal_node.is_yaw_considered:
-            angle = random.uniform(-math.pi/2, math.pi/2)
+            angle = random.uniform(-math.pi, math.pi)
             pose += (angle, )
         rnd = Node(*pose)
     else:
-        rnd = Node(*goal_node.pose())
+        rnd = goal_region.sample_node()
     return rnd

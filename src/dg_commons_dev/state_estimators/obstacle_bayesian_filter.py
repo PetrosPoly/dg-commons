@@ -1,7 +1,9 @@
 import copy
 import itertools
+import math
+
 import numpy as np
-from geometry import SE2_from_translation_angle
+from geometry import SE2_from_translation_angle, rot2d_from_angle
 from dg_commons.sim.models.vehicle import VehicleGeometry
 from dg_commons.sim.models.vehicle_utils import VehicleParameters
 from typing import Tuple, List
@@ -15,6 +17,8 @@ from dg_commons import X
 import matplotlib.pyplot as plt
 import matplotlib.animation as animation
 import time
+from scipy.ndimage import measurements
+from shapely.geometry import Point, Polygon, MultiPoint, LineString, shape
 
 
 @dataclass
@@ -93,8 +97,9 @@ class ObstacleBayesian(Estimator):
             return
 
         delta_x, delta_y = u_k.x - self.previous_state.x, u_k.y - self.previous_state.y
+        delta_pos = np.matmul(rot2d_from_angle(-self.previous_state.theta), np.array([delta_x, delta_y]))
         delta_theta = u_k.theta - self.previous_state.theta
-        delta_se2 = SE2_from_translation_angle(np.array([delta_x, delta_y]), delta_theta)
+        delta_se2 = SE2_from_translation_angle(delta_pos, delta_theta)
 
         self.previous_state = u_k
         current_belief = copy.deepcopy(self.current_belief)
@@ -116,6 +121,7 @@ class ObstacleBayesian(Estimator):
         """
         current_belief: CircularGrid = copy.deepcopy(self.current_belief)
         current_b = current_belief.as_numpy()
+        # current_b = 0.5 * np.ones(current_b.shape)
 
         mat = self.p_did_not_cause_any_given_d_only(detections, max_dependency_dist)
         num = np.multiply(1-self.fn, current_b)
@@ -212,6 +218,57 @@ class ObstacleBayesian(Estimator):
             mat = res
 
         return mat
+
+    def get_shapely(self, threshold: float = 0.5, resampling_resolution: float = 0.1) -> List[Polygon]:
+        """
+        Returns a list of polygons representing the estimated obstacles in world coordinate frame
+        @param threshold: Threshold for probability. Above this value, a point is considered as belonging to an obstacle
+        @param resampling_resolution: The distribution is resampled on a uniform grid with the passed resolution
+        @return: List of polygons
+        """
+        pose = SE2_from_translation_angle(np.array([self.previous_state.x, self.previous_state.y]),
+                                          self.previous_state.theta)
+
+        def apply(x: float, y: float) -> Tuple[float, float]:
+            new_pos = SE2_apply_T2(pose, np.array([x, y]))
+            return new_pos[0], new_pos[1]
+
+        # TODO: commented better but intefficient or uncommented worse but efficient??
+        radius = self.current_belief.radius
+        int_radius = self.current_belief.internal
+        n_shape = 2 * int(radius / resampling_resolution)
+        half_n_internal = int(int_radius / resampling_resolution)
+        steps = list(np.linspace(-radius, radius, n_shape))
+        ys, xs = np.meshgrid(steps, steps)
+        query_pos = np.vstack((xs.ravel(), ys.ravel())).T
+
+        results = self.current_belief.values_by_positions(query_pos, if_nan=0)
+        res = np.reshape(results, (n_shape, n_shape))
+        res[int((n_shape / 2) - half_n_internal):int((n_shape / 2) + half_n_internal),
+            int((n_shape / 2) - half_n_internal):int((n_shape / 2) + half_n_internal)] = 0
+
+        thresholded = np.where(res > threshold, 1, 0)
+        # thresholded = np.where(self.current_belief.values > threshold, 1, 0)
+        connectivity_array = np.array([[1, 1, 1],
+                                       [1, 1, 1],
+                                       [1, 1, 1]])
+
+        polygons = []
+        labeled_array, num_features = measurements.label(thresholded, structure=connectivity_array)
+
+        for i in range(num_features):
+            idx_s = np.argwhere(labeled_array == (i+1))
+            points = []
+            for idx in idx_s:
+                points.append(shape(Point(apply(steps[idx[0]], steps[idx[1]]))))
+                # points.append(shape(Point(apply(self.pos_x[idx[0], idx[1]], self.pos_y[idx[0], idx[1]]))))
+
+            multipoint = MultiPoint(points)
+            poly = multipoint.convex_hull
+            if isinstance(poly, Point) or isinstance(poly, LineString):
+                poly = poly.buffer(resampling_resolution)
+            polygons.append(poly)
+        return polygons
 
     def simulation_ended(self):
         """
