@@ -219,7 +219,7 @@ class ObstacleBayesian(Estimator):
 
         return mat
 
-    def get_shapely(self, threshold: float = 0.5, resampling_resolution: float = 0.1) -> List[Polygon]:
+    def get_shapely(self, threshold: float = 0.7, resampling_resolution: float = 0.1) -> List[Polygon]:
         """
         Returns a list of polygons representing the estimated obstacles in world coordinate frame
         @param threshold: Threshold for probability. Above this value, a point is considered as belonging to an obstacle
@@ -265,6 +265,7 @@ class ObstacleBayesian(Estimator):
 
             multipoint = MultiPoint(points)
             poly = multipoint.convex_hull
+            poly = poly.buffer(0.2)
             if isinstance(poly, Point) or isinstance(poly, LineString):
                 poly = poly.buffer(resampling_resolution)
             polygons.append(poly)

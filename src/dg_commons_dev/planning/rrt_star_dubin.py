@@ -1,3 +1,5 @@
+import math
+
 import numpy as np
 from dg_commons_dev.planning.rrt_star import RRTStar, RRTStarParams
 from shapely.geometry import Point, Polygon, LineString
@@ -20,7 +22,7 @@ class RRTStarDubinParams(RRTStarParams):
     """ Maximal number of iterations """
     goal_sample_rate: float = 10
     """ Rate at which, on average, the goal position is sampled in % """
-    sampling_fct: Callable[[BaseBoundaries, GoalRegion, float], Node] = uniform_sampling
+    sampling_fct: Callable[[BaseBoundaries, GoalRegion, float, Tuple[float, float]], Node] = uniform_sampling
     """ 
     Sampling function: takes sampling boundaries, goal node, goal sampling rate and returns a sampled node
     """
@@ -44,8 +46,8 @@ class RRTStarDubinParams(RRTStarParams):
     Method for nearest neighbor search. Searches for the nearest neighbor to a node through a list of nodes wrt distance
     function.
     """
-    enlargement_factor: Tuple[float, float] = (1.5, 1.5)
-    """ Proportional length and width min distance to keep from obstacles"""
+    dist_from_obstacles: float = 0.3
+    """ Distance to keep from obstacles """
     connect_circle_dist: float = 50.0
     """ Radius of near neighbors is proportional to this one """
     max_curvature: float = 0.2
@@ -66,7 +68,8 @@ class RRTStarDubins(RRTStar):
         super().__init__(params)
 
     def planning(self, start: Node, goal: GoalRegion, obstacle_list: List[BaseGeometry],
-                 sampling_bounds: BaseBoundaries, search_until_max_iter: bool = False) -> Optional[List[Node]]:
+                 sampling_bounds: BaseBoundaries, search_until_max_iter: bool = False,
+                 limit_angles: Tuple[float, float] = (-math.pi, math.pi)) -> Optional[List[Node]]:
         """
         RRT Dubin planning
         @param start: Starting node
@@ -74,6 +77,7 @@ class RRTStarDubins(RRTStar):
         @param obstacle_list: List of shapely objects representing obstacles
         @param sampling_bounds: Boundaries in the samples space
         @param search_until_max_iter: flag for whether to search until max_iter
+        @param limit_angles: Sampling space for angle
         @return: sequence of nodes corresponding to path found or None if no path was found
         """
 
@@ -86,7 +90,7 @@ class RRTStarDubins(RRTStar):
 
         for i in range(self.max_iter):
             print("Iter:", i, ", number of nodes:", len(self.node_list))
-            rnd = self.sampling_fct(self.boundaries, self.end, self.goal_sample_rate)
+            rnd = self.sampling_fct(self.boundaries, self.end, self.goal_sample_rate, limit_angles)
             nearest_ind = self.nearest(rnd, self.node_list, self.distance_meas, self.curvature)
             new_node = self.steering_fct(self.node_list[nearest_ind], rnd, self.expand_dis,
                                          self.path_resolution, self.curvature)

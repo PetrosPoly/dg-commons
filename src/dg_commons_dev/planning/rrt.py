@@ -24,7 +24,7 @@ class RRTParams(BaseParams):
     """ Maximal number of iterations """
     goal_sample_rate: float = 5
     """ Rate at which, on average, the goal position is sampled in % """
-    sampling_fct: Callable[[BaseBoundaries, GoalRegion, float], Node] = uniform_sampling
+    sampling_fct: Callable[[BaseBoundaries, GoalRegion, float, Tuple[float, float]], Node] = uniform_sampling
     """ 
     Sampling function: takes sampling boundaries, goal node, goal sampling rate and returns a sampled node
     """
@@ -50,8 +50,8 @@ class RRTParams(BaseParams):
     """
     vehicle_geom: VehicleGeometry = VehicleGeometry.default_car()
     """ vehicle geometry """
-    enlargement_factor: Tuple[float, float] = (1.5, 1.5)
-    """ Proportional length and width min distance to keep from obstacles"""
+    dist_from_obstacles: float = 0.3
+    """ Distance to keep from obstacles """
     connect_circle_dist: float = 50.0
     """ Radius of near neighbors is proportional to this one, only used in RRT star """
     max_curvature: float = 0.2
@@ -63,7 +63,7 @@ class RRTParams(BaseParams):
         assert 0 <= self.goal_sample_rate <= 100
         assert 0 < self.max_distance
         assert 0 < self.max_distance_to_goal
-        assert 1 <= self.enlargement_factor[0] and 1 <= self.enlargement_factor[1]
+        assert 0 <= self.dist_from_obstacles
         assert 0 <= self.connect_circle_dist
         assert 0 <= self.max_curvature
 
@@ -100,17 +100,18 @@ class RRT(Planner):
         self.max_iter: int = params.max_iter
 
         self.steering_fct: Callable[[Node, Node, float, float, float], Node] = params.steering_fct
-        self.sampling_fct: Callable[[BaseBoundaries, GoalRegion, float], Node] = params.sampling_fct
+        self.sampling_fct: Callable[[BaseBoundaries, GoalRegion, float, Tuple[float, float]], Node] = params.sampling_fct
         self.distance_meas: Callable[[Node, Node], float] = params.distance_meas
         self.nearest: Callable[[Node, List[Node], Callable[[Node, Node], float]], int] = params.nearest_neighbor_search
 
         self.vg: VehicleGeometry = params.vehicle_geom
-        self.enl_f: Tuple[float, float] = params.enlargement_factor
+        self.dist_from_obstacles: float = params.dist_from_obstacles
         self.curvature = params.max_curvature
         self.connect_circle_dist = params.connect_circle_dist
 
-    def planning(self, start: Node, goal: GoalRegion, obstacle_list: List[BaseGeometry], sampling_bounds: BaseBoundaries,
-                 search_until_max_iter: bool = False) -> Optional[List[Node]]:
+    def planning(self, start: Node, goal: GoalRegion, obstacle_list: List[BaseGeometry],
+                 sampling_bounds: BaseBoundaries, search_until_max_iter: bool = False,
+                 limit_angles: Tuple[float, float] = (-math.pi, math.pi)) -> Optional[List[Node]]:
         """
         RRT planning
         @param start: Starting node
@@ -118,6 +119,7 @@ class RRT(Planner):
         @param obstacle_list: List of shapely objects representing obstacles
         @param sampling_bounds: Boundaries in the samples space
         @param search_until_max_iter: flag for whether to search until max_iter
+        @param limit_angles: Sampling space for angle
         @return: sequence of nodes corresponding to path found or None if no path was found
         """
 
@@ -131,7 +133,7 @@ class RRT(Planner):
 
         for i in range(self.max_iter):
             print("Iter:", i, ", number of nodes:", len(self.node_list))
-            rnd_node = self.sampling_fct(sampling_bounds, self.end, self.goal_sample_rate)
+            rnd_node = self.sampling_fct(sampling_bounds, self.end, self.goal_sample_rate, limit_angles)
             nearest_ind = self.nearest(rnd_node, self.node_list, self.distance_meas, self.curvature)
             nearest_node = self.node_list[nearest_ind]
 
@@ -205,7 +207,17 @@ class RRT(Planner):
         return_val: bool = True
 
         assert len(node.path_x) == len(node.path_y)
-        n = len(node.path_x) - 1
+        n = len(node.path_x)
+        positions = []
+        for i in range(n):
+            positions.append((node.path_x[i], node.path_y[i]))
+        car_path = LineString(positions).buffer(self.vg.width/2 + self.dist_from_obstacles)
+        for obs in obstacle_list:
+            if car_path.intersects(obs):
+                return_val = False
+                break
+
+        '''n = len(node.path_x) - 1
         for i in range(n):
             p = (node.path_x[i], node.path_y[i])
             p_next = (node.path_x[i + 1], node.path_y[i + 1])
@@ -213,6 +225,7 @@ class RRT(Planner):
             for obs in obstacle_list:
                 if line.intersects(obs):
                     return_val = False
+        '''
 
         return return_val
 
@@ -259,13 +272,13 @@ class RRT(Planner):
         """
         @return: Returns the enlarged length of the vehicle
         """
-        return self.enl_f[0] * self.vg.length
+        return self.vg.length
 
     def get_width(self) -> float:
         """
         @return: Returns the enlarged width of the vehicle
         """
-        return self.enl_f[1] * self.vg.width
+        return self.vg.width + self.dist_from_obstacles
 
     def plot_results(self, create_animation: bool = False) -> None:
         """
@@ -361,7 +374,7 @@ class RRT(Planner):
                 x, y = vehicle.exterior.xy
                 lines[0].set_data(x, y)
 
-                vehicle = move_vehicle(self.vg, p1, p2, self.enl_f)
+                vehicle = move_vehicle(self.vg, p1, p2, (1, 1))
                 x, y = vehicle.exterior.xy
                 lines[1].set_data(x, y)
                 return lines[:n]

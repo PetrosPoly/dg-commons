@@ -10,6 +10,7 @@ from dg_commons_dev.planning.rrt_utils.nearest_neighbor import  naive, dubin_dis
 from dg_commons_dev.planning.rrt_utils.sampling import BaseBoundaries
 from shapely.geometry.base import BaseGeometry
 from dg_commons_dev.planning.rrt_utils.goal_region import GoalRegion
+import math
 
 
 @dataclass
@@ -20,7 +21,7 @@ class RRTDubinParams(RRTParams):
     """ Maximal number of iterations """
     goal_sample_rate: float = 10
     """ Rate at which, on average, the goal position is sampled in % """
-    sampling_fct: Callable[[BaseBoundaries, GoalRegion, float], Node] = uniform_sampling
+    sampling_fct: Callable[[BaseBoundaries, GoalRegion, float, Tuple[float, float]], Node] = uniform_sampling
     """ 
     Sampling function: takes sampling boundaries, goal node, goal sampling rate and returns a sampled node
     """
@@ -44,8 +45,8 @@ class RRTDubinParams(RRTParams):
     Method for nearest neighbor search. Searches for the nearest neighbor to a node through a list of nodes wrt distance
     function.
     """
-    enlargement_factor: Tuple[float, float] = (1.5, 1.5)
-    """ Proportional length and width min distance to keep from obstacles"""
+    dist_from_obstacles: float = 0.3
+    """ Distance to keep from obstacles """
     connect_circle_dist: float = 50.0
     """ Radius of near neighbors is proportional to this one """
     max_curvature: float = 0.2
@@ -66,7 +67,8 @@ class RRTDubins(RRT):
         super().__init__(params)
 
     def planning(self, start: Node, goal: GoalRegion, obstacle_list: List[BaseGeometry],
-                 sampling_bounds: BaseBoundaries, search_until_max_iter: bool = False) -> Optional[List[Node]]:
+                 sampling_bounds: BaseBoundaries, search_until_max_iter: bool = False,
+                 limit_angles: Tuple[float, float] = (-math.pi, math.pi)) -> Optional[List[Node]]:
         """
         RRT Dubin planning
         @param start: Starting node
@@ -74,6 +76,7 @@ class RRTDubins(RRT):
         @param obstacle_list: List of shapely objects representing obstacles
         @param sampling_bounds: Boundaries in the samples space
         @param search_until_max_iter: flag for whether to search until max_iter
+        @param limit_angles: Sampling space for angle
         @return: sequence of nodes corresponding to path found or None if no path was found
         """
 
@@ -86,7 +89,7 @@ class RRTDubins(RRT):
 
         for i in range(self.max_iter):
             print("Iter:", i, ", number of nodes:", len(self.node_list))
-            rnd = self.sampling_fct(self.boundaries, self.end, self.goal_sample_rate)
+            rnd = self.sampling_fct(self.boundaries, self.end, self.goal_sample_rate, limit_angles)
             nearest_ind = self.nearest(rnd, self.node_list, self.distance_meas, self.curvature)
             new_node = self.steering_fct(self.node_list[nearest_ind], rnd, self.expand_dis,
                                          self.path_resolution, self.curvature)
@@ -108,6 +111,8 @@ class RRTDubins(RRT):
             return self.generate_final_course()
         else:
             print("Cannot find path")
+            print(self.end.goal_node.x, self.end.goal_node.y, self.end.goal_node.yaw)
+            print(self.start.x, self.start.y, self.start.yaw)
 
         return None
 

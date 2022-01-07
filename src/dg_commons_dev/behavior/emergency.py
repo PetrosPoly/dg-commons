@@ -7,6 +7,7 @@ from dg_commons.sim.models import kmh2ms, extract_vel_from_state
 from dg_commons.sim.models.vehicle import VehicleParameters
 from dg_commons import PlayerName, X
 from dg_commons_dev.utils import BaseParams
+from shapely.geometry import LineString
 
 
 @dataclass
@@ -84,6 +85,7 @@ class Emergency(Situation[SituationObservations, EmergencyDescription]):
         my_occupancy: Polygon = agents[my_name].occupancy
         my_polygon, _ = occupancy_prediction(agents[my_name].state, self.safety_time_braking)
 
+        # TODO: fix duplicated code
         for other_name, _ in agents.items():
             if other_name == my_name:
                 continue
@@ -100,6 +102,74 @@ class Emergency(Situation[SituationObservations, EmergencyDescription]):
                                                            self.safety_time_braking, my_vel, tol=0.01)
                 other_entry_time, other_exit_time = entry_exit_t(intersection, other_state, other_occupancy,
                                                                  self.safety_time_braking, other_vel, tol=0.01)
+
+                collision_score: float = 0
+                collision_max: float = 1  # if collision_score > collision_max then there is an emergency
+
+                def pet_score(pet: float):
+                    pet_min = self.safety_time_braking*2
+                    if pet < pet_min:
+                        return 1.0
+                    else:
+                        return 0.0
+
+                def ttc_score(ttc: float):
+                    ttc_min = self.safety_time_braking*2
+                    if ttc < ttc_min:
+                        return 1.0
+                    else:
+                        return 0.0
+
+                def drac_score(drac: float):
+                    drac_max = self.acc_limits[1]
+                    if drac_max < drac:
+                        return 1.0
+                    else:
+                        return 0.0
+
+                pet: float = other_entry_time - my_exit_time if my_exit_time < other_exit_time else \
+                    my_entry_time - other_exit_time
+                self.emergency_situation.my_player = my_name
+                self.emergency_situation.pet = pet
+                collision_score += pet_score(pet)
+
+                pot1, pot2 = my_exit_time - other_entry_time > 0, other_exit_time - my_entry_time > 0
+                if pot1 or pot2:
+                    ttc = other_entry_time if my_entry_time < other_entry_time else my_entry_time
+                    self.emergency_situation.ttc = ttc
+                    collision_score += ttc_score(ttc)
+                    drac1: float = 2 * (other_vel - other_vel * other_entry_time / my_exit_time) / my_exit_time \
+                        if pot1 else 0.0
+                    drac2: float = 2 * (my_vel - my_vel * my_entry_time / other_exit_time) / other_exit_time \
+                        if pot2 else 0.0
+                    drac: float = max(drac1, drac2)
+                    collision_score += drac_score(drac)
+                    self.emergency_situation.drac = [drac1, drac2]
+                    if collision_max < collision_score:
+                        self.emergency_situation.is_emergency = True
+                        self.emergency_situation.other_player = other_name
+
+                        other_occupancy, _ = occupancy_prediction(agents[other_name].state, 0.1)
+                        my_occupancy, _ = occupancy_prediction(agents[my_name].state, 0.1)
+                        self.polygon_plotter.plot_polygon(my_occupancy,
+                                                          SituationPolygons.PolygonClass(collision=True))
+                        self.polygon_plotter.plot_polygon(other_occupancy,
+                                                          SituationPolygons.PolygonClass(collision=True))
+
+        for obs in new_obs.static_obstacles:
+            if isinstance(obs.shape, LineString):
+                continue
+
+            other_vel: float = 0
+            other_polygon: Polygon = obs.shape
+
+            intersection: Polygon = my_polygon.intersection(other_polygon)
+            if intersection.is_empty:
+                self.emergency_situation = EmergencyDescription(False)
+            else:
+                my_entry_time, my_exit_time = entry_exit_t(intersection, my_state, my_occupancy,
+                                                           self.safety_time_braking, my_vel, tol=0.01)
+                other_entry_time, other_exit_time = 0, 10e6
 
                 collision_score: float = 0
                 collision_max: float = 1  # if collision_score > collision_max then there is an emergency
